@@ -289,3 +289,27 @@ test("standaardattributen: vaste betekenis, alleen gevraagd waar ze gelden", { s
   const r3 = await leg(b, "1.1.1", { persoonsgegevens: "Nee", openbaarheidsbeperking: "Geen beperking" });
   assert.equal(r3.statusCode, 200, r3.body);
 });
+
+test("het paneel leest een vastgelegde classificatie met de modelversie van toen", { skip: overslaan }, async () => {
+  const oud = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Versie van toen", attributen: [{ sleutel: "bron", label: "Bron", type: "tekst", verplicht: false }] } });
+  assert.equal(oud.statusCode, 201, oud.body);
+  const id = (await vraag("POST", "/objecten", { objecttype: "document", metadata: md("in bewerking") })).json().identificatie;
+  const r = await vraag("PUT", `/objecten/${id}/classificatie`, { resultaat: "1.1", attributen: { bron: "brief" } });
+  assert.equal(r.statusCode, 200, r.body);
+  const versie = r.json().classificatie.modelversie;
+  assert.equal(versie, oud.json().versie);
+  // Daarna een nieuwe versie zonder dat attribuut.
+  const nieuw = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Versie van nu", attributen: [] } });
+  assert.equal(nieuw.statusCode, 201, nieuw.body);
+
+  const nu = (await vraag("GET", "/classificatie")).json();
+  assert.equal(nu.model.versie, nieuw.json().versie);
+  const toen = (await vraag("GET", `/classificatie?versie=${versie}`)).json();
+  assert.equal(toen.model.versie, versie);
+  assert.equal(toen.model.config.naam, "Versie van toen");
+  assert.deepEqual(toen.model.config.attributen.map((a) => a.sleutel), ["bron"]);
+  assert.ok(toen.selectielijst.resultaten.some((x) => x.id === "1.1"));
+  // Een versie die niet bestaat: geen model. Een ongeldige: 400.
+  assert.equal((await vraag("GET", "/classificatie?versie=9999")).json().model, null);
+  assert.equal((await vraag("GET", "/classificatie?versie=nul")).statusCode, 400);
+});

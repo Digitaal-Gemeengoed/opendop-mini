@@ -274,11 +274,17 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     },
   } as const;
 
-  /** Voor het paneel: het model dat nu geldt, met de resultaten die de gemeente gebruikt. */
-  app.get<{ Querystring: { alleenModel?: string } }>("/classificatie", async (req) => {
+  /**
+   * Voor het paneel: het model dat nu geldt, met de resultaten die de gemeente gebruikt.
+   * Met ?versie=N die versie: een vastgelegde classificatie toont het paneel met het model van toen.
+   */
+  app.get<{ Querystring: { alleenModel?: string; versie?: number } }>(
+    "/classificatie",
+    { schema: { querystring: { type: "object", properties: { alleenModel: { type: "string", maxLength: 5 }, versie: { type: "integer", minimum: 1 } } } } },
+    async (req) => {
     const { gemeente } = context(req);
     return inGemeente(gemeente, async (c) => {
-      const model = await leesClassificatiemodel(c);
+      const model = await leesClassificatiemodel(c, req.query.versie);
       if (!model || req.query.alleenModel) return { model };
       const lijst = lijstVan(model.config);
       return {
@@ -286,7 +292,8 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
         selectielijst: { id: lijst.id, naam: lijst.naam, toelichting: lijst.toelichting, procestypen: lijst.procestypen, resultaten: resultatenInGebruik(model.config, lijst) },
       };
     });
-  });
+    },
+  );
 
   /** Voor het beheerportaal: de selectielijst, de statussen uit het metadatamodel, het model en zijn versies. */
   app.get("/classificatiemodel", async (req) => {

@@ -1,5 +1,9 @@
 # Wijzigingen
 
+## 0.17.0 — 2026-11-19
+
+- `GET /classificatie?versie=N`: die versie van het classificatiemodel, met de selectielijst. Het paneel toont een vastgelegde classificatie daarmee zoals ze is vastgelegd. Een versie die niet bestaat geeft `model: null`.
+
 ## 0.16.0 — 2026-11-19
 
 - Standaardattributen in het classificatiemodel (oa-contract 0.11.0): `standaard` en `koppeling` per attribuut.
