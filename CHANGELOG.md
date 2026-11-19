@@ -1,5 +1,10 @@
 # Wijzigingen
 
+## 0.16.0 — 2026-11-19
+
+- Standaardattributen in het classificatiemodel (oa-contract 0.11.0): `standaard` en `koppeling` per attribuut.
+- Vastleggen: een attribuut dat voor de klasse niet geldt (de openbaarheidsbeperking bij vernietigen), is niet verplicht en wordt niet bewaard.
+
 ## 0.15.0 — 2026-11-19
 
 - Ondersteunende stukken met **categorieën en toetsvragen** (oa-contract 0.10.0). Het classificatiemodel accepteert `ondersteunend.categorieen` en `ondersteunend.toetsvragen`.

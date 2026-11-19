@@ -264,6 +264,8 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
             opties: { type: "array", maxItems: 100, items: { type: "string", minLength: 1, maxLength: 200 } },
             verplicht: { type: "boolean" },
             beschrijving: { type: "string", maxLength: 500 },
+            standaard: { type: "string", maxLength: 40 },
+            koppeling: { type: "object", maxProperties: 20, additionalProperties: { type: "string", maxLength: 200 } },
           },
         },
       },

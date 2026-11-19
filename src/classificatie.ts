@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  attribuutGeldt,
   isOndersteunend,
   ondersteunendResultaat,
   type ZaakClassificatie,
@@ -183,6 +184,8 @@ export async function legClassificatieVast(
   }
   const attributen: Record<string, string | boolean> = {};
   for (const a of model.config.attributen) {
+    // Sommige standaardattributen gelden alleen bij blijvend bewaren; anders niet gevraagd en niet bewaard.
+    if (!attribuutGeldt(a, r?.waardering)) continue;
     const w = vraag.attributen?.[a.sleutel];
     if (w === undefined || w === "") {
       if (a.verplicht) fouten.push({ veld: a.sleutel, melding: `${a.label} is verplicht.` });

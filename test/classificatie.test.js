@@ -264,3 +264,28 @@ test("zoektermen, ondersteunende stukken en de klasse van de zaak", { skip: over
   assert.equal((await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen zonder" } })).statusCode, 201);
   assert.equal((await leg(await nieuw({}), "ondersteunend")).statusCode, 422);
 });
+
+test("standaardattributen: vaste betekenis, alleen gevraagd waar ze gelden", { skip: overslaan }, async () => {
+  const persoonsgegevens = { sleutel: "persoonsgegevens", standaard: "persoonsgegevens", label: "AVG", type: "keuze", opties: ["Nee", "Ja", "Ja, met BSN"], verplicht: true, koppeling: { geen: "Nee", gewoon: "Ja", bsn: "Ja, met BSN" } };
+  const beperking = { sleutel: "openbaarheidsbeperking", standaard: "openbaarheidsbeperking", label: "Openbaarheidsbeperking", type: "keuze", opties: ["Geen beperking", "Persoonlijke levenssfeer"], verplicht: true };
+  const p = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen met standaardattributen", attributen: [persoonsgegevens, beperking] } });
+  assert.equal(p.statusCode, 201, p.body);
+  // Een eigen attribuut met een gereserveerde sleutel: niet toegestaan.
+  const fout = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, attributen: [{ sleutel: "hotspot", label: "Hotspot", type: "ja-nee", verplicht: false }] } });
+  assert.equal(fout.statusCode, 422);
+
+  const nieuw = async () => (await vraag("POST", "/objecten", { objecttype: "document", metadata: md("in bewerking") })).json().identificatie;
+  const leg = (id, resultaat, attributen) => vraag("PUT", `/objecten/${id}/classificatie`, { resultaat, attributen });
+  // Vernietigen (1.1, met de afwijking): de openbaarheidsbeperking wordt niet gevraagd en niet bewaard.
+  const a = await nieuw();
+  const r1 = await leg(a, "1.1", { persoonsgegevens: "Ja", openbaarheidsbeperking: "Persoonlijke levenssfeer" });
+  assert.equal(r1.statusCode, 200, r1.body);
+  assert.deepEqual(r1.json().classificatie.attributen, { persoonsgegevens: "Ja" });
+  // Blijvend bewaren (1.1.1): dan is ze verplicht.
+  const b = await nieuw();
+  const r2 = await leg(b, "1.1.1", { persoonsgegevens: "Nee" });
+  assert.equal(r2.statusCode, 422);
+  assert.ok(r2.json().details.some((x) => x.veld === "openbaarheidsbeperking"), r2.body);
+  const r3 = await leg(b, "1.1.1", { persoonsgegevens: "Nee", openbaarheidsbeperking: "Geen beperking" });
+  assert.equal(r3.statusCode, 200, r3.body);
+});
