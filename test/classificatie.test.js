@@ -197,3 +197,38 @@ test("een geplande versie wijzigen: een nieuwe versie vervangt haar; een ingegan
   assert.equal(nu.statusCode, 201, nu.body);
   assert.equal((await vraag("GET", "/classificatiemodel")).json().actief.versie, nu.json().versie);
 });
+
+test("zoektermen, ondersteunende stukken en de klasse van de zaak", { skip: overslaan }, async () => {
+  const ondersteunend = { omschrijving: "Kopieën, kladversies en stukken ter kennisname", bewaartermijn: "P1Y", grondslag: "Richtlijn informatiebeheer Velsen 2026" };
+  const p = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen met zoektermen", zoektermen: [{ resultaat: "1.1", termen: ["organogram"] }], ondersteunend } });
+  assert.equal(p.statusCode, 201, p.body);
+  const k = (await vraag("GET", "/classificatie")).json();
+  assert.deepEqual(k.selectielijst.resultaten.find((r) => r.id === "1.1").zoektermen, ["organogram"]);
+  assert.deepEqual(k.model.config.ondersteunend, ondersteunend);
+
+  const nieuw = async (extra) => (await vraag("POST", "/objecten", { objecttype: "document", metadata: { ...md("in bewerking"), ...extra } })).json().identificatie;
+  const leg = (id, resultaat) => vraag("PUT", `/objecten/${id}/classificatie`, { resultaat, attributen: { biv: "laag" } });
+  const a = await nieuw({ zaak: "Z-2026-1" });
+  const b = await nieuw({ zaak: "Z-2026-1" });
+  const c = await nieuw({ zaak: "Z-2026-1" });
+  assert.equal((await leg(a, "1.1")).statusCode, 200);
+  assert.equal((await leg(b, "1.1")).statusCode, 200);
+  const z = (await vraag("GET", `/objecten/${c}/zaakclassificatie`)).json();
+  assert.equal(z.rol, "zaak");
+  assert.equal(z.waarde, "Z-2026-1");
+  assert.deepEqual(z.klassen.map((x) => [x.resultaat, x.aantal]), [["1.1", 2]]);
+  assert.equal(Object.keys(z.klassen[0]).includes("titel"), false, "geen titels van andere stukken");
+
+  // Ondersteunend: vastleggen, termijn vanaf het classificeren.
+  const d = await nieuw({});
+  const o = await leg(d, "ondersteunend");
+  assert.equal(o.statusCode, 200, o.body);
+  assert.equal(o.json().bewaren.start, "classificatie");
+  assert.equal(o.json().bewaren.archiefactiedatum, telOp(vandaag(), "P1Y"));
+  // Zonder zaak en zonder dossier: niets om over te nemen.
+  assert.equal((await vraag("GET", `/objecten/${d}/zaakclassificatie`)).json().klassen.length, 0);
+
+  // Zonder ondersteunend in het model: niet te kiezen.
+  assert.equal((await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen zonder" } })).statusCode, 201);
+  assert.equal((await leg(await nieuw({}), "ondersteunend")).statusCode, 422);
+});

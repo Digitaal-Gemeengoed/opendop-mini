@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  ONDERSTEUNEND,
+  ondersteunendResultaat,
+  type ZaakClassificatie,
   bepaalBewaren,
   controleerClassificatiemodel,
   isVergrendeld,
@@ -158,9 +161,19 @@ export async function legClassificatieVast(
   await toetsVergrendeling(c, id, actor, "metadata");
   const model = await leesClassificatiemodel(c);
   if (!model) throw new PlatformFout(409, "geen-classificatiemodel", "Deze gemeente heeft nog geen classificatiemodel. Stel het in het beheerportaal in.");
-  const r = resultatenInGebruik(model.config, lijstVan(model.config)).find((x) => x.id === vraag.resultaat);
+  const r =
+    vraag.resultaat === ONDERSTEUNEND
+      ? model.config.ondersteunend
+        ? ondersteunendResultaat(model.config.ondersteunend)
+        : undefined
+      : resultatenInGebruik(model.config, lijstVan(model.config)).find((x) => x.id === vraag.resultaat);
   const fouten: { veld: string; melding: string }[] = [];
-  if (!r) fouten.push({ veld: "resultaat", melding: `Resultaat ${vraag.resultaat} is niet in gebruik in het classificatiemodel.` });
+  if (!r) {
+    fouten.push({
+      veld: "resultaat",
+      melding: vraag.resultaat === ONDERSTEUNEND ? "Het classificatiemodel kent geen ondersteunende stukken." : `Resultaat ${vraag.resultaat} is niet in gebruik in het classificatiemodel.`,
+    });
+  }
   const attributen: Record<string, string | boolean> = {};
   for (const a of model.config.attributen) {
     const w = vraag.attributen?.[a.sleutel];
@@ -339,4 +352,45 @@ export async function beoordeelVoorstel(
   ]);
   await c.query("UPDATE objecten SET laatste_volgnummer = $2 WHERE identificatie = $1", [v.object, g.volgnummer]);
   return naarVoorstel(await voorstelRij(c, vid));
+}
+
+
+/**
+ * Hoe de andere zakelijke stukken in dezelfde zaak zijn geclassificeerd; zonder
+ * zaaknummer (of zonder andere stukken in de zaak) die in hetzelfde dossier.
+ * Een stuk in een zaak krijgt in de regel de klasse van de zaak. Alleen
+ * klassen en aantallen: de titels van die stukken blijven buiten beeld.
+ */
+export async function zaakClassificatie(c: Client, id: string): Promise<ZaakClassificatie | null> {
+  const o = await c.query("SELECT objecttype_naam, objecttype_versie, metadata, aard FROM objecten WHERE identificatie = $1", [id]);
+  if (!o.rowCount || o.rows[0].aard === "persoonlijk") return null;
+  const { objecttype_naam: naam, objecttype_versie: versie, metadata } = o.rows[0];
+  // Elke versie van het objecttype kan het zaakveld anders noemen.
+  const typen = await c.query("SELECT versie, schema FROM objecttypen WHERE naam = $1", [naam]);
+  const sleutels = (rol: "zaak" | "dossier") => [...new Set(typen.rows.map((t) => rollenVan(t.schema)[rol]).filter((k): k is string => !!k))];
+  const eigen = typen.rows.find((t) => t.versie === versie);
+  const model = await leesClassificatiemodel(c);
+  const inGebruik = new Set(model ? resultatenInGebruik(model.config, lijstVan(model.config)).map((x) => x.id) : []);
+  if (model?.config.ondersteunend) inGebruik.add(ONDERSTEUNEND);
+  for (const rol of ["zaak", "dossier"] as const) {
+    const sleutel = eigen ? rollenVan(eigen.schema)[rol] : undefined;
+    const waarde = sleutel ? metadata[sleutel] : undefined;
+    if (typeof waarde !== "string" || !waarde.trim()) continue;
+    const ks = sleutels(rol);
+    const r = await c.query(
+      `SELECT classificatie->>'resultaat' AS resultaat, count(*)::int AS aantal, max(classificatie->>'op') AS laatst,
+              (array_agg(classificatie->>'einddatumProcesobject' ORDER BY classificatie->>'op' DESC) FILTER (WHERE classificatie ? 'einddatumProcesobject'))[1] AS einddatum
+         FROM objecten
+        WHERE identificatie <> $1 AND aard = 'zakelijk' AND classificatie IS NOT NULL AND objecttype_naam = $2
+          AND EXISTS (SELECT 1 FROM unnest($3::text[]) k WHERE objecten.metadata->>k = $4)
+        GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 5`,
+      [id, naam, ks, waarde.trim()],
+    );
+    const klassen = r.rows
+      .filter((x) => inGebruik.has(x.resultaat))
+      .map((x) => ({ resultaat: x.resultaat as string, aantal: x.aantal as number, laatst: x.laatst as string, ...(x.einddatum ? { einddatumProcesobject: x.einddatum as string } : {}) }));
+    // Een zaak zonder andere geclassificeerde stukken: dan het dossier, als dat er is.
+    if (klassen.length || rol === "dossier") return { rol, waarde: waarde.trim(), klassen };
+  }
+  return null;
 }

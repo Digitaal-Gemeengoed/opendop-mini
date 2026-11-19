@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 0.14.0 — 2026-11-19
+
+- `GET /objecten/:id/zaakclassificatie`: hoe de andere zakelijke stukken in dezelfde zaak zijn geclassificeerd (anders: in hetzelfde dossier), op de rollen `zaak` en `dossier` van het metadatamodel, over alle versies ervan. Alleen klassen, aantallen en de laatste einddatum van het procesobject; geen titels. Alleen klassen die het model nu gebruikt.
+- Classificeren als **ondersteunend** (`resultaat: "ondersteunend"`) als het model dat toestaat; de termijn loopt vanaf het classificeren.
+- Het classificatiemodel neemt `zoektermen` en `ondersteunend` aan; `GET /classificatie` geeft de zoektermen bij de resultaten.
+- Vereist oa-contract 0.9.0.
+
 ## 0.13.0 — 2026-11-19
 
 **Een geplande versie wijzigen** (metadatamodel en classificatiemodel). Een versie die nog niet is ingegaan, is nog niet in gebruik en mag nog veranderen; zodra ze geldt, leidt elke wijziging tot een nieuwe versie.

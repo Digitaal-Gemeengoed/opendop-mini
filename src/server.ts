@@ -49,6 +49,7 @@ import {
   publiceerClassificatiemodel,
   statussenVan,
   versiesClassificatiemodel,
+  zaakClassificatie,
 } from "./classificatie.js";
 import { CLASSIFICATIEMODELNAAM_MAX, controleerClassificatiemodel, resultatenInGebruik, standaardClassificatiemodel, type ClassificatiemodelConfig } from "@digitaalgemeengoed/oa-contract";
 import { bevestigPii, leesPiiRegister, onthulPii, registreerPii, terugzettenPii, toetsVersieMetPii, vernietigPii, vervallenPii, wijzigCategoriePii, zetVersieTerug } from "./piiregister.js";
@@ -208,6 +209,29 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
             bewaartermijn: { type: "string", maxLength: 20 },
             reden: { type: "string", maxLength: 1000 },
           },
+        },
+      },
+      zoektermen: {
+        type: "array",
+        maxItems: 1000,
+        items: {
+          type: "object",
+          required: ["resultaat", "termen"],
+          additionalProperties: false,
+          properties: {
+            resultaat: { type: "string", maxLength: 20 },
+            termen: { type: "array", maxItems: 40, items: { type: "string", maxLength: 60 } },
+          },
+        },
+      },
+      ondersteunend: {
+        type: ["object", "null"],
+        required: ["omschrijving", "bewaartermijn", "grondslag"],
+        additionalProperties: false,
+        properties: {
+          omschrijving: { type: "string", maxLength: 1000 },
+          bewaartermijn: { type: "string", maxLength: 20 },
+          grondslag: { type: "string", maxLength: 300 },
         },
       },
       attributen: {
@@ -488,6 +512,15 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     return inGemeente(gemeente, async (c) => {
       await toetsToegang(c, req.params.id, actor);
       return leesObject(c, req.params.id);
+    });
+  });
+
+  /** Hoe andere stukken in dezelfde zaak of hetzelfde dossier zijn geclassificeerd (klassen en aantallen). */
+  app.get<{ Params: { id: string } }>("/objecten/:id/zaakclassificatie", async (req) => {
+    const { gemeente, actor } = context(req);
+    return inGemeente(gemeente, async (c) => {
+      await toetsToegang(c, req.params.id, actor);
+      return (await zaakClassificatie(c, req.params.id)) ?? { rol: null, waarde: null, klassen: [] };
     });
   });
 
