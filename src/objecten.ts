@@ -119,7 +119,7 @@ export async function lijstObjecttypen(c: Client): Promise<Objecttype[]> {
 export async function versiesVanObjecttype(c: Client, gemeente: string, naam: string) {
   const r = await c.query(
     `SELECT t.versie, t.titel, t.status, t.gepubliceerd, t.ingang, t.schema, (t.gemeente = '*') AS gedeeld,
-            (SELECT row_to_json(i) FROM (SELECT i.reden, i.door, i.op FROM ingetrokken_versies i WHERE i.soort = 'objecttype' AND i.naam = t.naam AND i.versie = t.versie AND i.gemeente = t.gemeente) i) AS ingetrokken,
+            (SELECT row_to_json(i) FROM (SELECT i.reden, i.door, i.op, i.vervangen_door AS "vervangenDoor" FROM ingetrokken_versies i WHERE i.soort = 'objecttype' AND i.naam = t.naam AND i.versie = t.versie AND i.gemeente = t.gemeente) i) AS ingetrokken,
             (SELECT g.actor FROM gebeurtenissen g
               WHERE g.type = 'objecttype.gepubliceerd' AND g.gemeente = $2 AND g.gegevens->>'naam' = t.naam AND (g.gegevens->>'versie')::int = t.versie
               ORDER BY g.volgnummer DESC LIMIT 1) AS actor
@@ -132,7 +132,7 @@ export async function versiesVanObjecttype(c: Client, gemeente: string, naam: st
     status: x.status as string,
     gepubliceerd: (x.gepubliceerd as Date).toISOString(),
     ingang: (x.ingang as Date).toISOString(),
-    ingetrokken: (x.ingetrokken as { reden: string; door: string | null; op: string } | null) ?? null,
+    ingetrokken: (x.ingetrokken as { reden: string; door: string | null; op: string; vervangenDoor: number | null } | null) ?? null,
     gedeeld: x.gedeeld as boolean,
     door: (x.actor as { naam?: string; sub?: string } | null)?.naam ?? null,
     model: ((x.schema as Record<string, unknown>)["x-oa-model"] as string | undefined) ?? null,
@@ -148,10 +148,11 @@ export async function publiceerObjecttype(
   actor: Actor,
   type: Omit<Objecttype, "versie" | "status"> & { status?: "concept" | "actief" },
   ingang?: Date,
+  vervangt?: number,
 ): Promise<Objecttype> {
   const fout = schemaBruikbaar(type.schema);
   if (fout) throw new PlatformFout(422, "schema-onbruikbaar", "Het schema is geen geldig JSON Schema.", fout);
-  await toetsGeenPlanning(c, gemeente, "objecttype", type.naam);
+  await toetsGeenPlanning(c, gemeente, "objecttype", type.naam, vervangt);
   const r = await c.query(`SELECT COALESCE(MAX(versie), 0) + 1 AS v FROM objecttypen WHERE naam = $1`, [type.naam]);
   const versie = Number(r.rows[0].v);
   const status = type.status ?? "actief";
@@ -160,7 +161,8 @@ export async function publiceerObjecttype(
      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, now()))`,
     [gemeente, type.naam, versie, type.titel, type.schema, status, type.vervaldatum ?? null, ingang ?? null],
   );
-  await legGebeurtenisVast(c, gemeente, "objecttype.gepubliceerd", null, actor, { naam: type.naam, versie, status, ...(ingang ? { ingang: ingang.toISOString() } : {}) });
+  await legGebeurtenisVast(c, gemeente, "objecttype.gepubliceerd", null, actor, { naam: type.naam, versie, status, ...(ingang ? { ingang: ingang.toISOString() } : {}), ...(vervangt ? { vervangt } : {}) });
+  if (vervangt) await markeerVervangen(c, gemeente, actor, "objecttype", type.naam, vervangt, versie);
   return { ...type, versie, status, vervaldatum: type.vervaldatum ?? null };
 }
 
@@ -667,12 +669,25 @@ export async function geplandeVersie(c: Client, gemeente: string, soort: Soort, 
  * Zolang er een versie gepland staat, geen nieuwe versie: anders zou de
  * nieuwe de geplande op de ingangsdatum stilletjes opzijzetten.
  */
-export async function toetsGeenPlanning(c: Client, gemeente: string, soort: Soort, naam: string): Promise<void> {
+export async function toetsGeenPlanning(c: Client, gemeente: string, soort: Soort, naam: string, vervangt?: number): Promise<void> {
   const g = await geplandeVersie(c, gemeente, soort, naam);
+  if (vervangt !== undefined) {
+    // Wijzigen mag alleen bij de versie die nu gepland staat: een ingegane versie verandert niet meer.
+    if (!g || g.versie !== vervangt) throw new PlatformFout(409, "niet-gepland", `Versie ${vervangt} staat niet (meer) gepland en is niet meer te wijzigen. Maak een nieuwe versie.`);
+    return;
+  }
   if (g) {
     const dag = new Date(g.ingang).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam", dateStyle: "long", timeStyle: "short" });
     throw new PlatformFout(409, "versie-gepland", `Versie ${g.versie} staat gepland per ${dag}. Trek die eerst in, of wacht tot hij is ingegaan.`);
   }
+}
+
+/** Na het publiceren van een vervanger: de geplande versie gaat niet meer in; de nieuwe neemt haar plaats in. */
+export async function markeerVervangen(c: Client, gemeente: string, actor: Actor, soort: Soort, naam: string, oud: number, nieuw: number): Promise<void> {
+  await c.query("INSERT INTO ingetrokken_versies (gemeente, soort, naam, versie, reden, door, vervangen_door) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
+    gemeente, soort, naam, oud, `Gewijzigd voor de ingang; vervangen door versie ${nieuw}.`, actor.naam ?? actor.sub, nieuw,
+  ]);
+  await legGebeurtenisVast(c, gemeente, `${soort}.ingetrokken`, null, actor, { naam, versie: oud, vervangenDoor: nieuw });
 }
 
 /** Een geplande versie intrekken: hij gaat dan nooit in. Een ingegane versie kun je niet intrekken. */

@@ -23,6 +23,7 @@ import {
   leesObject,
   leesObjecttype,
   toetsGeenPlanning,
+  markeerVervangen,
   legGebeurtenisVast,
   vergrendel,
   voegVersieToe,
@@ -43,9 +44,9 @@ export const SELECTIELIJSTEN = { "gemeenten-2020": SELECTIELIJST_2020 } as const
 export const lijstVan = (c: Pick<ClassificatiemodelConfig, "selectielijst">) => SELECTIELIJSTEN[c.selectielijst] ?? SELECTIELIJST_2020;
 
 /** Met de ingangsdatum, en of een geplande versie is ingetrokken. */
-export type ModelMetIngang = Classificatiemodel & { ingang: string; ingetrokken: { reden: string; door: string | null; op: string } | null };
+export type ModelMetIngang = Classificatiemodel & { ingang: string; ingetrokken: { reden: string; door: string | null; op: string; vervangenDoor?: number | null } | null };
 
-const MET_INTREKKING = `SELECT m.*, (SELECT row_to_json(i) FROM (SELECT i.reden, i.door, i.op FROM ingetrokken_versies i
+const MET_INTREKKING = `SELECT m.*, (SELECT row_to_json(i) FROM (SELECT i.reden, i.door, i.op, i.vervangen_door AS "vervangenDoor" FROM ingetrokken_versies i
     WHERE i.soort = 'classificatiemodel' AND i.naam = 'classificatiemodel' AND i.versie = m.versie AND i.gemeente = m.gemeente) i) AS ingetrokken
   FROM classificatiemodellen m`;
 
@@ -73,14 +74,14 @@ export function statussenVan(type: Pick<Objecttype, "schema">): string[] | null 
   return e?.enum ? [...e.enum] : null;
 }
 
-export async function publiceerClassificatiemodel(c: Client, gemeente: string, actor: Actor, config: ClassificatiemodelConfig, ingang?: Date): Promise<Classificatiemodel> {
-  await toetsGeenPlanning(c, gemeente, "classificatiemodel", "classificatiemodel");
+export async function publiceerClassificatiemodel(c: Client, gemeente: string, actor: Actor, config: ClassificatiemodelConfig, ingang?: Date, vervangt?: number): Promise<Classificatiemodel> {
+  await toetsGeenPlanning(c, gemeente, "classificatiemodel", "classificatiemodel", vervangt);
   const type = await leesObjecttype(c, "document");
   const fouten = controleerClassificatiemodel(config, lijstVan(config), statussenVan(type)).filter((p) => p.ernst === "fout");
   if (fouten.length) throw new PlatformFout(422, "model-ongeldig", "Het classificatiemodel klopt nog niet.", fouten.map((p) => ({ veld: p.sleutel ?? "", melding: p.melding })));
   const r = await c.query("SELECT COALESCE(MAX(versie), 0) + 1 AS v FROM classificatiemodellen");
   const versie = Number(r.rows[0].v);
-  const g = await legGebeurtenisVast(c, gemeente, "classificatiemodel.gepubliceerd", null, actor, { versie, naam: config.naam ?? null, ...(ingang ? { ingang: ingang.toISOString() } : {}) });
+  const g = await legGebeurtenisVast(c, gemeente, "classificatiemodel.gepubliceerd", null, actor, { versie, naam: config.naam ?? null, ...(ingang ? { ingang: ingang.toISOString() } : {}), ...(vervangt ? { vervangt } : {}) });
   await c.query("INSERT INTO classificatiemodellen (gemeente, versie, config, gepubliceerd, door, ingang) VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, $4::timestamptz))", [
     gemeente,
     versie,
@@ -89,6 +90,7 @@ export async function publiceerClassificatiemodel(c: Client, gemeente: string, a
     actor.naam ?? actor.sub,
     ingang ?? null,
   ]);
+  if (vervangt) await markeerVervangen(c, gemeente, actor, "classificatiemodel", "classificatiemodel", vervangt, versie);
   return (await leesClassificatiemodel(c, versie))!;
 }
 

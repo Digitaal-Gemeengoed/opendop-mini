@@ -1,5 +1,15 @@
 # Wijzigingen
 
+## 0.13.0 — 2026-11-19
+
+**Een geplande versie wijzigen** (metadatamodel en classificatiemodel). Een versie die nog niet is ingegaan, is nog niet in gebruik en mag nog veranderen; zodra ze geldt, leidt elke wijziging tot een nieuwe versie.
+
+- `POST /objecttypen/:naam/model` en `POST /classificatiemodel` nemen een optionele `vervangt` (het nummer van de geplande versie). In één transactie komt er een nieuwe versie (met de opgegeven ingang, of meteen) en gaat de geplande niet meer in.
+- De tabellen blijven alleen-toevoegen: de vervangen versie krijgt een rij in `ingetrokken_versies` met `vervangen_door`, en de gebeurtenis `…ingetrokken` met `vervangenDoor`. Geen stuk kan naar een geplande versie verwijzen, dus er raakt niets los.
+- Alleen de versie die nu gepland staat, is te vervangen; anders 409 `niet-gepland`.
+- De versielijsten geven bij een intrekking ook `vervangenDoor`.
+- Migratie `011_vervangen.sql`.
+
 ## 0.12.0 — 2026-11-19
 
 **Ingangsdatum voor een nieuwe modelversie** (metadatamodel en classificatiemodel).

@@ -271,12 +271,12 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     },
   );
 
-  app.post<{ Body: { config: ClassificatiemodelConfig; ingang?: string } }>(
+  app.post<{ Body: { config: ClassificatiemodelConfig; ingang?: string; vervangt?: number } }>(
     "/classificatiemodel",
-    { schema: { body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CLASSIFICATIEMODEL_SCHEMA, ingang: { type: "string", format: "date-time" } } } } },
+    { schema: { body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CLASSIFICATIEMODEL_SCHEMA, ingang: { type: "string", format: "date-time" }, vervangt: { type: "integer", minimum: 1 } } } } },
     async (req, antwoord) => {
       const { gemeente, actor } = context(req);
-      const model = await inGemeente(gemeente, (c) => publiceerClassificatiemodel(c, gemeente, actor, req.body.config, toetsIngang(req.body.ingang)));
+      const model = await inGemeente(gemeente, (c) => publiceerClassificatiemodel(c, gemeente, actor, req.body.config, toetsIngang(req.body.ingang), req.body.vervangt));
       return antwoord.status(201).send(model);
     },
   );
@@ -394,12 +394,12 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
   });
 
   /** Een metadatamodel publiceren als nieuwe versie van het objecttype (alleen voor deze gemeente). */
-  app.post<{ Params: { naam: string }; Body: { config: MetadatamodelConfig; titel?: string; ingang?: string } }>(
+  app.post<{ Params: { naam: string }; Body: { config: MetadatamodelConfig; titel?: string; ingang?: string; vervangt?: number } }>(
     "/objecttypen/:naam/model",
     {
       schema: {
         params: { type: "object", properties: { naam: { type: "string", pattern: "^[a-z][a-z0-9-]{1,60}$" } } },
-        body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CONFIG_SCHEMA, titel: { type: "string", minLength: 1, maxLength: 100 }, ingang: { type: "string", format: "date-time" } } },
+        body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CONFIG_SCHEMA, titel: { type: "string", minLength: 1, maxLength: 100 }, ingang: { type: "string", format: "date-time" }, vervangt: { type: "integer", minimum: 1 } } },
       },
     },
     async (req, antwoord) => {
@@ -409,7 +409,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
       const schema = schemaUitConfig(req.body.config);
       const type = await inGemeente(gemeente, async (c) => {
         const huidig = await leesObjecttype(c, req.params.naam).catch(() => null);
-        return publiceerObjecttype(c, gemeente, actor, { naam: req.params.naam, titel: req.body.titel ?? huidig?.titel ?? "Document", schema, vervaldatum: null }, toetsIngang(req.body.ingang));
+        return publiceerObjecttype(c, gemeente, actor, { naam: req.params.naam, titel: req.body.titel ?? huidig?.titel ?? "Document", schema, vervaldatum: null }, toetsIngang(req.body.ingang), req.body.vervangt);
       });
       return antwoord.status(201).send(type);
     },

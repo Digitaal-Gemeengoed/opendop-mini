@@ -142,3 +142,19 @@ test("een ingangsdatum: tot die dag geldt de huidige versie; een geplande versie
   assert.equal((await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "RGBZ Bloemendaal 2" } })).statusCode, 201);
   assert.equal(await actief(), 5);
 });
+
+test("een geplande versie van het metadatamodel wijzigen: de nieuwe vervangt haar", { skip: overslaan }, async () => {
+  const actief = async () => (await vraag("GET", "/objecttypen/document")).json().versie;
+  const nu = await actief();
+  const later = new Date(Date.now() + 9 * 86400_000).toISOString();
+  const p = await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "RGBZ eerste opzet" }, ingang: later });
+  assert.equal(p.statusCode, 201, p.body);
+  assert.equal((await vraag("POST", "/objecttypen/document/model", { config: rgbz(), vervangt: nu })).json().fout, "niet-gepland");
+  const w = await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "RGBZ herzien" }, ingang: later, vervangt: p.json().versie });
+  assert.equal(w.statusCode, 201, w.body);
+  assert.equal(await actief(), nu, "geldt nog steeds niet");
+  const lijst = (await vraag("GET", "/objecttypen/document/versies")).json();
+  assert.equal(lijst.find((x) => x.versie === p.json().versie).ingetrokken.vervangenDoor, w.json().versie);
+  assert.equal(lijst.find((x) => x.versie === w.json().versie).ingetrokken, null);
+  assert.equal(lijst.find((x) => x.versie === w.json().versie).ingang, later);
+});

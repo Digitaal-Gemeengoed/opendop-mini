@@ -176,3 +176,24 @@ test("classificatiemodel met een ingangsdatum: gepland, geldt nog niet, intrekke
   assert.equal((await vraag("GET", "/classificatiemodel")).json().versies[0].ingetrokken.reden, "Selectielijst 2027 nog niet vastgesteld");
   assert.equal((await vraag("POST", "/classificatiemodel", { config: MODEL })).statusCode, 201);
 });
+
+test("een geplande versie wijzigen: een nieuwe versie vervangt haar; een ingegane versie niet", { skip: overslaan }, async () => {
+  const voor = (await vraag("GET", "/classificatiemodel")).json().actief.versie;
+  const later = new Date(Date.now() + 40 * 86400_000).toISOString();
+  const p = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen 2027" }, ingang: later });
+  assert.equal(p.statusCode, 201, p.body);
+  const gepland = p.json().versie;
+  assert.equal((await vraag("POST", "/classificatiemodel", { config: MODEL, vervangt: voor })).json().fout, "niet-gepland", "de versie in gebruik is niet te wijzigen");
+  const w = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen 2027 (herzien)" }, ingang: later, vervangt: gepland });
+  assert.equal(w.statusCode, 201, w.body);
+  const st = (await vraag("GET", "/classificatiemodel")).json();
+  assert.equal(st.actief.versie, voor, "nog steeds de huidige");
+  const oud = st.versies.find((v) => v.versie === gepland);
+  assert.equal(oud.ingetrokken.vervangenDoor, w.json().versie);
+  assert.equal(st.versies[0].config.naam, "Velsen 2027 (herzien)");
+  assert.equal((await vraag("POST", "/classificatiemodel", { config: MODEL, vervangt: gepland })).json().fout, "niet-gepland", "een vervangen versie is niet nog eens te wijzigen");
+  // Wijzigen zonder ingang: de vervanger geldt meteen.
+  const nu = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen per direct" }, vervangt: w.json().versie });
+  assert.equal(nu.statusCode, 201, nu.body);
+  assert.equal((await vraag("GET", "/classificatiemodel")).json().actief.versie, nu.json().versie);
+});
