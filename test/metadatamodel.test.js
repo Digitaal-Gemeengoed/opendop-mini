@@ -115,3 +115,30 @@ test("een andere naam is een nieuwe versie; de versies noemen de naam", { skip: 
   assert.deepEqual(v.map((x) => [x.versie, x.modelnaam]), [[3, "RGBZ Bloemendaal"], [2, "RGBZ"], [1, "Standaardmodel"]]);
   assert.equal((await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "x".repeat(81) } })).statusCode, 400);
 });
+
+test("een ingangsdatum: tot die dag geldt de huidige versie; een geplande versie kun je intrekken", { skip: overslaan }, async () => {
+  const actief = async () => (await vraag("GET", "/objecttypen/document")).json().versie;
+  assert.equal(await actief(), 3);
+  const later = new Date(Date.now() + 7 * 86400_000).toISOString();
+  const p = await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "RGBZ per volgende week" }, ingang: later });
+  assert.equal(p.statusCode, 201, p.body);
+  assert.equal(p.json().versie, 4);
+  assert.equal(await actief(), 3, "de geplande versie geldt nog niet");
+  const v4 = (await vraag("GET", "/objecttypen/document/versies")).json().find((x) => x.versie === 4);
+  assert.equal(v4.ingang, later);
+  assert.equal(v4.ingetrokken, null);
+  // Zolang er iets gepland staat, geen nieuwe versie.
+  const dubbel = await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "Nog een" } });
+  assert.equal(dubbel.statusCode, 409);
+  assert.equal(dubbel.json().fout, "versie-gepland");
+  // Te ver vooruit, of intrekken van een versie die al geldt: nee.
+  assert.equal((await vraag("POST", "/objecttypen/document/model", { config: rgbz(), ingang: new Date(Date.now() + 3 * 366 * 86400_000).toISOString() })).statusCode, 400);
+  assert.equal((await vraag("POST", "/objecttypen/document/versies/3/intrekken", { reden: "Deze geldt al" })).statusCode, 409);
+  const i = await vraag("POST", "/objecttypen/document/versies/4/intrekken", { reden: "Toch niet volgende week" });
+  assert.equal(i.statusCode, 200, i.body);
+  const na = (await vraag("GET", "/objecttypen/document/versies")).json().find((x) => x.versie === 4);
+  assert.equal(na.ingetrokken.reden, "Toch niet volgende week");
+  // Daarna mag weer een nieuwe versie, en die geldt meteen.
+  assert.equal((await vraag("POST", "/objecttypen/document/model", { config: { ...rgbz(), naam: "RGBZ Bloemendaal 2" } })).statusCode, 201);
+  assert.equal(await actief(), 5);
+});

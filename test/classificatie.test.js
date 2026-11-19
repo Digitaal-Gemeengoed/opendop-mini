@@ -161,3 +161,18 @@ test("Woo: een stuk zonder informatiecategorie legt dat vast als keuze", { skip:
   assert.equal(o.json().metadata.informatiecategorie, GEEN_WOO_CATEGORIE);
   assert.equal((await vraag("POST", "/objecten", { objecttype: "document", metadata: { ...md("in bewerking"), informatiecategorie: "geen" } })).statusCode, 422);
 });
+
+test("classificatiemodel met een ingangsdatum: gepland, geldt nog niet, intrekken", { skip: overslaan }, async () => {
+  const voor = (await vraag("GET", "/classificatiemodel")).json().actief.versie;
+  const later = new Date(Date.now() + 30 * 86400_000).toISOString();
+  const p = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen 2027" }, ingang: later });
+  assert.equal(p.statusCode, 201, p.body);
+  const st = (await vraag("GET", "/classificatiemodel")).json();
+  assert.equal(st.actief.versie, voor, "het huidige model blijft gelden");
+  assert.equal(st.versies[0].ingang, later);
+  assert.equal((await vraag("GET", "/classificatie")).json().model.versie, voor, "ook in het paneel");
+  assert.equal((await vraag("POST", "/classificatiemodel", { config: MODEL })).json().fout, "versie-gepland");
+  assert.equal((await vraag("POST", `/classificatiemodel/versies/${p.json().versie}/intrekken`, { reden: "Selectielijst 2027 nog niet vastgesteld" })).statusCode, 200);
+  assert.equal((await vraag("GET", "/classificatiemodel")).json().versies[0].ingetrokken.reden, "Selectielijst 2027 nog niet vastgesteld");
+  assert.equal((await vraag("POST", "/classificatiemodel", { config: MODEL })).statusCode, 201);
+});

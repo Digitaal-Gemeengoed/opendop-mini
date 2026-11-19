@@ -22,6 +22,7 @@ import {
   decodeer,
   leesObject,
   leesObjecttype,
+  toetsGeenPlanning,
   legGebeurtenisVast,
   vergrendel,
   voegVersieToe,
@@ -41,19 +42,27 @@ import { ontsleutel, versleutel } from "./sleutelbeheer.js";
 export const SELECTIELIJSTEN = { "gemeenten-2020": SELECTIELIJST_2020 } as const;
 export const lijstVan = (c: Pick<ClassificatiemodelConfig, "selectielijst">) => SELECTIELIJSTEN[c.selectielijst] ?? SELECTIELIJST_2020;
 
-function naarModel(r: Record<string, any>): Classificatiemodel {
-  return { versie: r.versie, config: r.config, gepubliceerd: r.gepubliceerd.toISOString(), door: r.door ?? null };
+/** Met de ingangsdatum, en of een geplande versie is ingetrokken. */
+export type ModelMetIngang = Classificatiemodel & { ingang: string; ingetrokken: { reden: string; door: string | null; op: string } | null };
+
+const MET_INTREKKING = `SELECT m.*, (SELECT row_to_json(i) FROM (SELECT i.reden, i.door, i.op FROM ingetrokken_versies i
+    WHERE i.soort = 'classificatiemodel' AND i.naam = 'classificatiemodel' AND i.versie = m.versie AND i.gemeente = m.gemeente) i) AS ingetrokken
+  FROM classificatiemodellen m`;
+
+function naarModel(r: Record<string, any>): ModelMetIngang {
+  return { versie: r.versie, config: r.config, gepubliceerd: r.gepubliceerd.toISOString(), door: r.door ?? null, ingang: r.ingang.toISOString(), ingetrokken: r.ingetrokken ?? null };
 }
 
 export async function leesClassificatiemodel(c: Client, versie?: number): Promise<Classificatiemodel | null> {
   const r = versie
-    ? await c.query("SELECT * FROM classificatiemodellen WHERE versie = $1", [versie])
-    : await c.query("SELECT * FROM classificatiemodellen ORDER BY versie DESC LIMIT 1");
+    ? await c.query(`${MET_INTREKKING} WHERE m.versie = $1`, [versie])
+    : // Het model dat nu geldt: ingegaan en niet ingetrokken.
+      await c.query(`${MET_INTREKKING} WHERE m.ingang <= now() AND NOT EXISTS (SELECT 1 FROM ingetrokken_versies i WHERE i.soort = 'classificatiemodel' AND i.versie = m.versie AND i.gemeente = m.gemeente) ORDER BY m.versie DESC LIMIT 1`);
   return r.rowCount ? naarModel(r.rows[0]) : null;
 }
 
 export async function versiesClassificatiemodel(c: Client): Promise<Classificatiemodel[]> {
-  return (await c.query("SELECT * FROM classificatiemodellen ORDER BY versie DESC")).rows.map(naarModel);
+  return (await c.query(`${MET_INTREKKING} ORDER BY m.versie DESC`)).rows.map(naarModel);
 }
 
 /** De waarden van het statusveld (rol status) in het objecttype, of null als het model geen status heeft. */
@@ -64,19 +73,21 @@ export function statussenVan(type: Pick<Objecttype, "schema">): string[] | null 
   return e?.enum ? [...e.enum] : null;
 }
 
-export async function publiceerClassificatiemodel(c: Client, gemeente: string, actor: Actor, config: ClassificatiemodelConfig): Promise<Classificatiemodel> {
+export async function publiceerClassificatiemodel(c: Client, gemeente: string, actor: Actor, config: ClassificatiemodelConfig, ingang?: Date): Promise<Classificatiemodel> {
+  await toetsGeenPlanning(c, gemeente, "classificatiemodel", "classificatiemodel");
   const type = await leesObjecttype(c, "document");
   const fouten = controleerClassificatiemodel(config, lijstVan(config), statussenVan(type)).filter((p) => p.ernst === "fout");
   if (fouten.length) throw new PlatformFout(422, "model-ongeldig", "Het classificatiemodel klopt nog niet.", fouten.map((p) => ({ veld: p.sleutel ?? "", melding: p.melding })));
   const r = await c.query("SELECT COALESCE(MAX(versie), 0) + 1 AS v FROM classificatiemodellen");
   const versie = Number(r.rows[0].v);
-  const g = await legGebeurtenisVast(c, gemeente, "classificatiemodel.gepubliceerd", null, actor, { versie, naam: config.naam ?? null });
-  await c.query("INSERT INTO classificatiemodellen (gemeente, versie, config, gepubliceerd, door) VALUES ($1, $2, $3, $4, $5)", [
+  const g = await legGebeurtenisVast(c, gemeente, "classificatiemodel.gepubliceerd", null, actor, { versie, naam: config.naam ?? null, ...(ingang ? { ingang: ingang.toISOString() } : {}) });
+  await c.query("INSERT INTO classificatiemodellen (gemeente, versie, config, gepubliceerd, door, ingang) VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, $4::timestamptz))", [
     gemeente,
     versie,
     config,
     g.tijdstip,
     actor.naam ?? actor.sub,
+    ingang ?? null,
   ]);
   return (await leesClassificatiemodel(c, versie))!;
 }

@@ -99,7 +99,7 @@ export async function leesObjecttype(c: Client, naam: string, versie?: number): 
         [naam, versie],
       )
     : await c.query(
-        `SELECT * FROM objecttypen WHERE naam = $1 AND status = 'actief'
+        `SELECT * FROM objecttypen WHERE naam = $1 AND status = 'actief' AND ingang <= now() AND NOT EXISTS (SELECT 1 FROM ingetrokken_versies i WHERE i.soort = 'objecttype' AND i.naam = objecttypen.naam AND i.versie = objecttypen.versie AND i.gemeente = objecttypen.gemeente)
           ORDER BY (gemeente = '*') ASC, versie DESC LIMIT 1`,
         [naam],
       );
@@ -109,7 +109,7 @@ export async function leesObjecttype(c: Client, naam: string, versie?: number): 
 
 export async function lijstObjecttypen(c: Client): Promise<Objecttype[]> {
   const r = await c.query(
-    `SELECT DISTINCT ON (naam) * FROM objecttypen WHERE status = 'actief'
+    `SELECT DISTINCT ON (naam) * FROM objecttypen WHERE status = 'actief' AND ingang <= now() AND NOT EXISTS (SELECT 1 FROM ingetrokken_versies i WHERE i.soort = 'objecttype' AND i.naam = objecttypen.naam AND i.versie = objecttypen.versie AND i.gemeente = objecttypen.gemeente)
       ORDER BY naam, (gemeente = '*') ASC, versie DESC`,
   );
   return r.rows.map(naarObjecttype);
@@ -118,7 +118,8 @@ export async function lijstObjecttypen(c: Client): Promise<Objecttype[]> {
 /** De versies van een objecttype: die van de gemeente zelf en de gedeelde, met wie ze publiceerde. */
 export async function versiesVanObjecttype(c: Client, gemeente: string, naam: string) {
   const r = await c.query(
-    `SELECT t.versie, t.titel, t.status, t.gepubliceerd, t.schema, (t.gemeente = '*') AS gedeeld,
+    `SELECT t.versie, t.titel, t.status, t.gepubliceerd, t.ingang, t.schema, (t.gemeente = '*') AS gedeeld,
+            (SELECT row_to_json(i) FROM (SELECT i.reden, i.door, i.op FROM ingetrokken_versies i WHERE i.soort = 'objecttype' AND i.naam = t.naam AND i.versie = t.versie AND i.gemeente = t.gemeente) i) AS ingetrokken,
             (SELECT g.actor FROM gebeurtenissen g
               WHERE g.type = 'objecttype.gepubliceerd' AND g.gemeente = $2 AND g.gegevens->>'naam' = t.naam AND (g.gegevens->>'versie')::int = t.versie
               ORDER BY g.volgnummer DESC LIMIT 1) AS actor
@@ -130,6 +131,8 @@ export async function versiesVanObjecttype(c: Client, gemeente: string, naam: st
     titel: x.titel as string,
     status: x.status as string,
     gepubliceerd: (x.gepubliceerd as Date).toISOString(),
+    ingang: (x.ingang as Date).toISOString(),
+    ingetrokken: (x.ingetrokken as { reden: string; door: string | null; op: string } | null) ?? null,
     gedeeld: x.gedeeld as boolean,
     door: (x.actor as { naam?: string; sub?: string } | null)?.naam ?? null,
     model: ((x.schema as Record<string, unknown>)["x-oa-model"] as string | undefined) ?? null,
@@ -144,18 +147,20 @@ export async function publiceerObjecttype(
   gemeente: string,
   actor: Actor,
   type: Omit<Objecttype, "versie" | "status"> & { status?: "concept" | "actief" },
+  ingang?: Date,
 ): Promise<Objecttype> {
   const fout = schemaBruikbaar(type.schema);
   if (fout) throw new PlatformFout(422, "schema-onbruikbaar", "Het schema is geen geldig JSON Schema.", fout);
+  await toetsGeenPlanning(c, gemeente, "objecttype", type.naam);
   const r = await c.query(`SELECT COALESCE(MAX(versie), 0) + 1 AS v FROM objecttypen WHERE naam = $1`, [type.naam]);
   const versie = Number(r.rows[0].v);
   const status = type.status ?? "actief";
   await c.query(
-    `INSERT INTO objecttypen (gemeente, naam, versie, titel, schema, status, vervaldatum)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [gemeente, type.naam, versie, type.titel, type.schema, status, type.vervaldatum ?? null],
+    `INSERT INTO objecttypen (gemeente, naam, versie, titel, schema, status, vervaldatum, ingang)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, now()))`,
+    [gemeente, type.naam, versie, type.titel, type.schema, status, type.vervaldatum ?? null, ingang ?? null],
   );
-  await legGebeurtenisVast(c, gemeente, "objecttype.gepubliceerd", null, actor, { naam: type.naam, versie, status });
+  await legGebeurtenisVast(c, gemeente, "objecttype.gepubliceerd", null, actor, { naam: type.naam, versie, status, ...(ingang ? { ingang: ingang.toISOString() } : {}) });
   return { ...type, versie, status, vervaldatum: type.vervaldatum ?? null };
 }
 
@@ -628,4 +633,52 @@ export async function maakOnleesbaar(
   await zetInOutbox(c, gemeente, g.volgnummer, "zoekindex");
   await m.sleutelbeheer.vernietig(gemeente, id);
   return leesObject(c, id);
+}
+
+// ---------------------------------------------------------------------------
+// Plannen: een versie met een ingang in de toekomst
+// ---------------------------------------------------------------------------
+
+type Soort = "objecttype" | "classificatiemodel";
+const TABEL: Record<Soort, string> = { objecttype: "objecttypen", classificatiemodel: "classificatiemodellen" };
+
+/** Een ingang: niet (veel) in het verleden, hoogstens twee jaar vooruit. */
+export function toetsIngang(w: string | undefined): Date | undefined {
+  if (!w) return undefined;
+  const d = new Date(w);
+  if (Number.isNaN(d.getTime())) throw new PlatformFout(400, "ingang-ongeldig", "De ingangsdatum is geen geldige datum.");
+  if (d.getTime() > Date.now() + 2 * 366 * 86400_000) throw new PlatformFout(400, "ingang-ongeldig", "Een ingangsdatum ligt hoogstens twee jaar vooruit.");
+  return d.getTime() < Date.now() ? undefined : d;
+}
+
+/** De geplande versie van deze gemeente (ingang in de toekomst, niet ingetrokken), of null. */
+export async function geplandeVersie(c: Client, gemeente: string, soort: Soort, naam: string): Promise<{ versie: number; ingang: string } | null> {
+  const r = await c.query(
+    `SELECT t.versie, t.ingang FROM ${TABEL[soort]} t
+      WHERE t.gemeente = $1 ${soort === "objecttype" ? "AND t.naam = $2" : "AND $2::text IS NOT NULL"} AND t.ingang > now()
+        AND NOT EXISTS (SELECT 1 FROM ingetrokken_versies i WHERE i.soort = $3 AND i.naam = $2 AND i.versie = t.versie AND i.gemeente = t.gemeente)
+      ORDER BY t.versie DESC LIMIT 1`,
+    [gemeente, naam, soort],
+  );
+  return r.rowCount ? { versie: r.rows[0].versie, ingang: (r.rows[0].ingang as Date).toISOString() } : null;
+}
+
+/**
+ * Zolang er een versie gepland staat, geen nieuwe versie: anders zou de
+ * nieuwe de geplande op de ingangsdatum stilletjes opzijzetten.
+ */
+export async function toetsGeenPlanning(c: Client, gemeente: string, soort: Soort, naam: string): Promise<void> {
+  const g = await geplandeVersie(c, gemeente, soort, naam);
+  if (g) {
+    const dag = new Date(g.ingang).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam", dateStyle: "long", timeStyle: "short" });
+    throw new PlatformFout(409, "versie-gepland", `Versie ${g.versie} staat gepland per ${dag}. Trek die eerst in, of wacht tot hij is ingegaan.`);
+  }
+}
+
+/** Een geplande versie intrekken: hij gaat dan nooit in. Een ingegane versie kun je niet intrekken. */
+export async function trekVersieIn(c: Client, gemeente: string, actor: Actor, soort: Soort, naam: string, versie: number, reden: string): Promise<void> {
+  const g = await geplandeVersie(c, gemeente, soort, naam);
+  if (!g || g.versie !== versie) throw new PlatformFout(409, "niet-gepland", "Alleen een versie die nog gepland staat, kun je intrekken.");
+  await c.query("INSERT INTO ingetrokken_versies (gemeente, soort, naam, versie, reden, door) VALUES ($1, $2, $3, $4, $5, $6)", [gemeente, soort, naam, versie, reden, actor.naam ?? actor.sub]);
+  await legGebeurtenisVast(c, gemeente, `${soort}.ingetrokken`, null, actor, { naam, versie, reden });
 }

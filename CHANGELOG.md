@@ -1,5 +1,17 @@
 # Wijzigingen
 
+## 0.12.0 — 2026-11-19
+
+**Ingangsdatum voor een nieuwe modelversie** (metadatamodel en classificatiemodel).
+
+- `POST /objecttypen/:naam/model` en `POST /classificatiemodel` nemen een optionele `ingang` (ISO-datum en -tijd, hoogstens twee jaar vooruit). Leeg of in het verleden: de versie geldt meteen.
+- De versie in gebruik is de hoogste versie die is ingegaan en niet is ingetrokken. Tot de ingang blijft de huidige versie gelden voor nieuwe stukken; vastgelegde stukken houden hun versie.
+- Zolang er een versie gepland staat, weigert het platform een volgende met 409 `versie-gepland` en een uitleg.
+- Nieuw: `POST /objecttypen/:naam/versies/:versie/intrekken` en `POST /classificatiemodel/versies/:versie/intrekken` met `{reden}`. Alleen een geplande versie is in te trekken; hij gaat dan nooit in. De intrekking staat in `ingetrokken_versies` (alleen toevoegen) en als gebeurtenis `objecttype.ingetrokken` of `classificatiemodel.ingetrokken`.
+- De versielijsten geven per versie `ingang` en `ingetrokken` (reden, door, op).
+- Migratie `010_ingang.sql`: kolom `ingang` (bestaande versies: het moment van publiceren) en de tabel `ingetrokken_versies`, met RLS per gemeente.
+- Vereist oa-contract 0.8.2.
+
 ## 0.11.1 — 2026-11-10
 
 Het metadatamodel accepteert `geenCategorie` bij het veld voor de Woo-informatiecategorie (oa-contract 0.8.1).

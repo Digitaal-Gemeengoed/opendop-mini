@@ -26,6 +26,8 @@ import {
   maakObject,
   maakOnleesbaar,
   publiceerObjecttype,
+  toetsIngang,
+  trekVersieIn,
   versiesVanObjecttype,
   voegVersieToe,
   type Middelen,
@@ -269,13 +271,29 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     },
   );
 
-  app.post<{ Body: { config: ClassificatiemodelConfig } }>(
+  app.post<{ Body: { config: ClassificatiemodelConfig; ingang?: string } }>(
     "/classificatiemodel",
-    { schema: { body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CLASSIFICATIEMODEL_SCHEMA } } } },
+    { schema: { body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CLASSIFICATIEMODEL_SCHEMA, ingang: { type: "string", format: "date-time" } } } } },
     async (req, antwoord) => {
       const { gemeente, actor } = context(req);
-      const model = await inGemeente(gemeente, (c) => publiceerClassificatiemodel(c, gemeente, actor, req.body.config));
+      const model = await inGemeente(gemeente, (c) => publiceerClassificatiemodel(c, gemeente, actor, req.body.config, toetsIngang(req.body.ingang)));
       return antwoord.status(201).send(model);
+    },
+  );
+
+  /** Een geplande versie van het classificatiemodel intrekken. */
+  app.post<{ Params: { versie: number }; Body: { reden: string } }>(
+    "/classificatiemodel/versies/:versie/intrekken",
+    {
+      schema: {
+        params: { type: "object", properties: { versie: { type: "integer", minimum: 1 } } },
+        body: { type: "object", required: ["reden"], additionalProperties: false, properties: { reden: { type: "string", minLength: 5, maxLength: 1000 } } },
+      },
+    },
+    async (req) => {
+      const { gemeente, actor } = context(req);
+      await inGemeente(gemeente, (c) => trekVersieIn(c, gemeente, actor, "classificatiemodel", "classificatiemodel", req.params.versie, req.body.reden));
+      return {};
     },
   );
 
@@ -376,12 +394,12 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
   });
 
   /** Een metadatamodel publiceren als nieuwe versie van het objecttype (alleen voor deze gemeente). */
-  app.post<{ Params: { naam: string }; Body: { config: MetadatamodelConfig; titel?: string } }>(
+  app.post<{ Params: { naam: string }; Body: { config: MetadatamodelConfig; titel?: string; ingang?: string } }>(
     "/objecttypen/:naam/model",
     {
       schema: {
         params: { type: "object", properties: { naam: { type: "string", pattern: "^[a-z][a-z0-9-]{1,60}$" } } },
-        body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CONFIG_SCHEMA, titel: { type: "string", minLength: 1, maxLength: 100 } } },
+        body: { type: "object", required: ["config"], additionalProperties: false, properties: { config: CONFIG_SCHEMA, titel: { type: "string", minLength: 1, maxLength: 100 }, ingang: { type: "string", format: "date-time" } } },
       },
     },
     async (req, antwoord) => {
@@ -391,9 +409,25 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
       const schema = schemaUitConfig(req.body.config);
       const type = await inGemeente(gemeente, async (c) => {
         const huidig = await leesObjecttype(c, req.params.naam).catch(() => null);
-        return publiceerObjecttype(c, gemeente, actor, { naam: req.params.naam, titel: req.body.titel ?? huidig?.titel ?? "Document", schema, vervaldatum: null });
+        return publiceerObjecttype(c, gemeente, actor, { naam: req.params.naam, titel: req.body.titel ?? huidig?.titel ?? "Document", schema, vervaldatum: null }, toetsIngang(req.body.ingang));
       });
       return antwoord.status(201).send(type);
+    },
+  );
+
+  /** Een geplande versie van het metadatamodel intrekken (gaat dan nooit in). */
+  app.post<{ Params: { naam: string; versie: number }; Body: { reden: string } }>(
+    "/objecttypen/:naam/versies/:versie/intrekken",
+    {
+      schema: {
+        params: { type: "object", properties: { naam: { type: "string", pattern: "^[a-z][a-z0-9-]{1,60}$" }, versie: { type: "integer", minimum: 1 } } },
+        body: { type: "object", required: ["reden"], additionalProperties: false, properties: { reden: { type: "string", minLength: 5, maxLength: 1000 } } },
+      },
+    },
+    async (req) => {
+      const { gemeente, actor } = context(req);
+      await inGemeente(gemeente, (c) => trekVersieIn(c, gemeente, actor, "objecttype", req.params.naam, req.params.versie, req.body.reden));
+      return {};
     },
   );
 
