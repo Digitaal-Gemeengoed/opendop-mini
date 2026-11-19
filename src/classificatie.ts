@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  ONDERSTEUNEND,
+  isOndersteunend,
   ondersteunendResultaat,
   type ZaakClassificatie,
   bepaalBewaren,
@@ -154,25 +154,32 @@ export async function legClassificatieVast(
   gemeente: string,
   actor: Actor,
   id: string,
-  vraag: { resultaat: string; attributen?: Record<string, string | boolean>; einddatumProcesobject?: string; verwachteVolgnummer?: number },
+  vraag: { resultaat: string; attributen?: Record<string, string | boolean>; einddatumProcesobject?: string; toetsvragenBevestigd?: boolean; verwachteVolgnummer?: number },
 ): Promise<ObjectMetStaat> {
   const staat = await vergrendel(c, id, vraag.verwachteVolgnummer);
   if (staat.aard === "persoonlijk") throw new PlatformFout(409, "persoonlijk-geen-classificatie", "Een persoonlijk stuk wordt niet geclassificeerd. Maak het eerst zakelijk.");
   await toetsVergrendeling(c, id, actor, "metadata");
   const model = await leesClassificatiemodel(c);
   if (!model) throw new PlatformFout(409, "geen-classificatiemodel", "Deze gemeente heeft nog geen classificatiemodel. Stel het in het beheerportaal in.");
-  const r =
-    vraag.resultaat === ONDERSTEUNEND
-      ? model.config.ondersteunend
-        ? ondersteunendResultaat(model.config.ondersteunend)
-        : undefined
-      : resultatenInGebruik(model.config, lijstVan(model.config)).find((x) => x.id === vraag.resultaat);
+  const steun = isOndersteunend(vraag.resultaat);
+  const r = steun
+    ? ondersteunendResultaat(model.config.ondersteunend, vraag.resultaat)
+    : resultatenInGebruik(model.config, lijstVan(model.config)).find((x) => x.id === vraag.resultaat);
   const fouten: { veld: string; melding: string }[] = [];
   if (!r) {
     fouten.push({
       veld: "resultaat",
-      melding: vraag.resultaat === ONDERSTEUNEND ? "Het classificatiemodel kent geen ondersteunende stukken." : `Resultaat ${vraag.resultaat} is niet in gebruik in het classificatiemodel.`,
+      melding: !steun
+        ? `Resultaat ${vraag.resultaat} is niet in gebruik in het classificatiemodel.`
+        : model.config.ondersteunend
+          ? `Het classificatiemodel kent ${vraag.resultaat} niet; kies een van de categorieën ondersteunende stukken.`
+          : "Het classificatiemodel kent geen ondersteunende stukken.",
     });
+  }
+  // Een ondersteunend stuk: eerst bevestigen dat geen van de toetsvragen geldt.
+  const toetsen = steun && !!model.config.ondersteunend?.toetsvragen?.length;
+  if (toetsen && vraag.toetsvragenBevestigd !== true) {
+    fouten.push({ veld: "toetsvragenBevestigd", melding: "Bevestig eerst dat geen van de toetsvragen geldt; anders is het stuk niet ondersteunend." });
   }
   const attributen: Record<string, string | boolean> = {};
   for (const a of model.config.attributen) {
@@ -194,6 +201,7 @@ export async function legClassificatieVast(
     resultaat: vraag.resultaat,
     ...(Object.keys(attributen).length ? { attributen } : {}),
     ...(vraag.einddatumProcesobject ? { einddatumProcesobject: vraag.einddatumProcesobject } : {}),
+    ...(toetsen ? { toetsvragenBevestigd: true } : {}),
     door: actor.naam ?? actor.sub,
   };
   const g = await legGebeurtenisVast(c, gemeente, "classificatie.vastgelegd", id, actor, { ...classificatie });
@@ -371,7 +379,7 @@ export async function zaakClassificatie(c: Client, id: string): Promise<ZaakClas
   const eigen = typen.rows.find((t) => t.versie === versie);
   const model = await leesClassificatiemodel(c);
   const inGebruik = new Set(model ? resultatenInGebruik(model.config, lijstVan(model.config)).map((x) => x.id) : []);
-  if (model?.config.ondersteunend) inGebruik.add(ONDERSTEUNEND);
+  // Ondersteunende stukken in een zaak zeggen niets over de klasse van de zaak.
   for (const rol of ["zaak", "dossier"] as const) {
     const sleutel = eigen ? rollenVan(eigen.schema)[rol] : undefined;
     const waarde = sleutel ? metadata[sleutel] : undefined;

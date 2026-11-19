@@ -226,12 +226,28 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
       },
       ondersteunend: {
         type: ["object", "null"],
-        required: ["omschrijving", "bewaartermijn", "grondslag"],
+        required: ["omschrijving", "grondslag"],
         additionalProperties: false,
         properties: {
           omschrijving: { type: "string", maxLength: 1000 },
           bewaartermijn: { type: "string", maxLength: 20 },
           grondslag: { type: "string", maxLength: 300 },
+          categorieen: {
+            type: "array",
+            maxItems: 20,
+            items: {
+              type: "object",
+              required: ["code", "naam", "voorbeelden", "bewaartermijn"],
+              additionalProperties: false,
+              properties: {
+                code: { type: "string", maxLength: 6 },
+                naam: { type: "string", maxLength: 100 },
+                voorbeelden: { type: "string", maxLength: 1000 },
+                bewaartermijn: { type: "string", maxLength: 20 },
+              },
+            },
+          },
+          toetsvragen: { type: "array", maxItems: 20, items: { type: "string", maxLength: 300 } },
         },
       },
       attributen: {
@@ -321,7 +337,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     },
   );
 
-  app.put<{ Params: { id: string }; Body: { resultaat: string; attributen?: Record<string, string | boolean>; einddatumProcesobject?: string; verwachteVolgnummer?: number } }>(
+  app.put<{ Params: { id: string }; Body: { resultaat: string; attributen?: Record<string, string | boolean>; einddatumProcesobject?: string; toetsvragenBevestigd?: boolean; verwachteVolgnummer?: number } }>(
     "/objecten/:id/classificatie",
     {
       schema: {
@@ -333,6 +349,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
             resultaat: { type: "string", maxLength: 20 },
             attributen: { type: "object", maxProperties: 50, additionalProperties: { type: ["string", "boolean"] } },
             einddatumProcesobject: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+            toetsvragenBevestigd: { type: "boolean" },
             verwachteVolgnummer: { type: "integer" },
           },
         },

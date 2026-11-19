@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 0.15.0 — 2026-11-19
+
+- Ondersteunende stukken met **categorieën en toetsvragen** (oa-contract 0.10.0). Het classificatiemodel accepteert `ondersteunend.categorieen` en `ondersteunend.toetsvragen`.
+- `PUT /objecten/:id/classificatie` met `ondersteunend.<code>`; heeft het model toetsvragen, dan is `toetsvragenBevestigd: true` verplicht (anders 422) en wordt het met de classificatie vastgelegd. Met categorieën is het kale `ondersteunend` niet meer te kiezen.
+- De klasse van de zaak telt ondersteunende stukken niet meer mee: een kopie of tussenversie in een zaak zegt niets over de klasse van de zaak.
+
 ## 0.14.0 — 2026-11-19
 
 - `GET /objecten/:id/zaakclassificatie`: hoe de andere zakelijke stukken in dezelfde zaak zijn geclassificeerd (anders: in hetzelfde dossier), op de rollen `zaak` en `dossier` van het metadatamodel, over alle versies ervan. Alleen klassen, aantallen en de laatste einddatum van het procesobject; geen titels. Alleen klassen die het model nu gebruikt.

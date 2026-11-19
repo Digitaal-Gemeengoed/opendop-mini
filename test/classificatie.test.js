@@ -228,6 +228,38 @@ test("zoektermen, ondersteunende stukken en de klasse van de zaak", { skip: over
   // Zonder zaak en zonder dossier: niets om over te nemen.
   assert.equal((await vraag("GET", `/objecten/${d}/zaakclassificatie`)).json().klassen.length, 0);
 
+  // Een ondersteunend stuk in de zaak zegt niets over de klasse van de zaak.
+  const e = await nieuw({ zaak: "Z-2026-1" });
+  assert.equal((await leg(e, "ondersteunend")).statusCode, 200);
+  assert.deepEqual((await vraag("GET", `/objecten/${c}/zaakclassificatie`)).json().klassen.map((x) => x.resultaat), ["1.1"]);
+
+  // Met categorieën en toetsvragen: een categorie kiezen, en eerst de toetsvragen bevestigen.
+  const opzet = {
+    omschrijving: "Stukken zonder archiefwaarde",
+    grondslag: "Beheerregeling informatiebeheer Velsen 2026",
+    categorieen: [
+      { code: "O2", naam: "Kopie of dubbel", voorbeelden: "Een kopie van een stuk dat elders staat", bewaartermijn: "P1Y" },
+      { code: "O3", naam: "Tussenversie", voorbeelden: "Een versie die alleen in het team is gedeeld", bewaartermijn: "P6M" },
+    ],
+    toetsvragen: ["Staat er een besluit, afspraak of toezegging in?"],
+  };
+  const m = await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen met categorieën", ondersteunend: opzet } });
+  assert.equal(m.statusCode, 201, m.body);
+  const f = await nieuw({});
+  const legO = (resultaat, extra = {}) => vraag("PUT", `/objecten/${f}/classificatie`, { resultaat, attributen: { biv: "laag" }, ...extra });
+  const zonder = await legO("ondersteunend.O3");
+  assert.equal(zonder.statusCode, 422);
+  assert.ok(zonder.json().details.some((x) => x.veld === "toetsvragenBevestigd"), zonder.body);
+  assert.equal((await legO("ondersteunend", { toetsvragenBevestigd: true })).statusCode, 422, "met categorieën: altijd een categorie");
+  assert.equal((await legO("ondersteunend.O9", { toetsvragenBevestigd: true })).statusCode, 422);
+  const met = await legO("ondersteunend.O3", { toetsvragenBevestigd: true });
+  assert.equal(met.statusCode, 200, met.body);
+  assert.equal(met.json().classificatie.toetsvragenBevestigd, true);
+  assert.equal(met.json().bewaren.archiefactiedatum, telOp(vandaag(), "P6M"));
+  assert.equal(met.json().bewaren.klasse, "Ondersteunend · O3 Tussenversie");
+  // Zonder bewaartermijn op het hoogste niveau en zonder categorieën: fout.
+  assert.equal((await vraag("POST", "/classificatiemodel", { config: { ...MODEL, ondersteunend: { omschrijving: "Stukken zonder archiefwaarde", grondslag: "Beheerregeling 2026" } } })).statusCode, 422);
+
   // Zonder ondersteunend in het model: niet te kiezen.
   assert.equal((await vraag("POST", "/classificatiemodel", { config: { ...MODEL, naam: "Velsen zonder" } })).statusCode, 201);
   assert.equal((await leg(await nieuw({}), "ondersteunend")).statusCode, 422);
