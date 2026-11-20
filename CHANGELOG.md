@@ -1,5 +1,9 @@
 # Wijzigingen
 
+## 0.18.1 — 2026-11-20
+
+- oa-contract 0.13.0.
+
 ## 0.18.0 — 2026-11-20
 
 **De status van een stuk en het classificatiemodel.** Werkt ook met een eigen statusveld (bijvoorbeeld de zaakstatus in een MDTO-model: ontvangen, in behandeling, afgesloten, geannuleerd).
