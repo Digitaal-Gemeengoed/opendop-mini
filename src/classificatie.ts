@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   attribuutGeldt,
+  attribuutVerplicht,
+  ontbreektVoorStatus,
   isOndersteunend,
   ondersteunendResultaat,
   type ZaakClassificatie,
@@ -31,10 +33,12 @@ import {
   legGebeurtenisVast,
   vergrendel,
   voegVersieToe,
+  zetInOutbox,
   type Middelen,
   type ObjectMetStaat,
 } from "./objecten.js";
 import { ontsleutel, versleutel } from "./sleutelbeheer.js";
+import { toets } from "./validatie.js";
 
 /**
  * Classificeren, bewaren, vergrendelen en wijzigingsvoorstellen.
@@ -130,6 +134,96 @@ export async function onthoudStatus(c: Client, id: string, type: Objecttype, met
   );
 }
 
+/**
+ * Wat een nieuwe status vraagt. Het stuk zelf: een classificatie en de
+ * attributen die bij die status verplicht zijn. Bij een status die het model
+ * doorgeeft: hetzelfde voor elk ander stuk in dezelfde zaak (of, zonder zaak,
+ * hetzelfde dossier). Ontbreekt er iets, dan krijgt geen enkel stuk de status.
+ * Stukken die al vergrendeld zijn of de status al hebben, blijven zoals ze zijn.
+ */
+export interface StatusPlan {
+  status: string;
+  rol: "zaak" | "dossier";
+  waarde: string;
+  stukken: { identificatie: string; metadata: Record<string, unknown>; sleutel: string; type: Objecttype }[];
+}
+
+export async function toetsNieuweStatus(
+  c: Client,
+  id: string | null,
+  type: Objecttype,
+  oud: string | null | undefined,
+  metadata: Record<string, unknown>,
+  classificatie: Classificatie | null,
+): Promise<StatusPlan | null> {
+  const status = rolWaarden(type.schema, metadata).status;
+  if (!status || status === oud) return null;
+  const model = await leesClassificatiemodel(c);
+  if (!model) return null;
+  const lijst = lijstVan(model.config);
+  const eigen = ontbreektVoorStatus(model.config, lijst, status, classificatie);
+  if (eigen.length) throw new PlatformFout(409, "status-vraagt-classificatie", eigen.join(" "), eigen.map((melding) => ({ veld: "classificatie", melding })));
+  if (!id || !model.config.doorgevenBij?.includes(status)) return null;
+
+  const rollen = rollenVan(type.schema);
+  const zaak = rollen.zaak ? String(metadata[rollen.zaak] ?? "").trim() : "";
+  const dossier = rollen.dossier ? String(metadata[rollen.dossier] ?? "").trim() : "";
+  const rol = zaak ? "zaak" : dossier ? "dossier" : null;
+  if (!rol) return null;
+  const waarde = rol === "zaak" ? zaak : dossier;
+
+  // Elke versie van het objecttype kan de zaak of het dossier onder een andere sleutel hebben.
+  const versies = await c.query("SELECT DISTINCT objecttype_versie AS v FROM objecten WHERE objecttype_naam = $1", [type.naam]);
+  const plan: StatusPlan = { status, rol, waarde, stukken: [] };
+  const fouten: { identificatie: string; melding: string }[] = [];
+  for (const { v } of versies.rows) {
+    const t = v === type.versie ? type : await leesObjecttype(c, type.naam, v);
+    const r = rollenVan(t.schema);
+    const sleutel = r[rol];
+    if (!sleutel || !r.status) continue;
+    const rijen = await c.query(
+      `SELECT identificatie, metadata, classificatie FROM objecten
+        WHERE objecttype_naam = $1 AND objecttype_versie = $2 AND identificatie <> $3 AND aard = 'zakelijk'
+          AND onleesbaar_gemaakt IS NULL AND btrim(metadata->>$4) = $5
+        ORDER BY identificatie FOR UPDATE`,
+      [type.naam, v, id, sleutel, waarde],
+    );
+    for (const o of rijen.rows) {
+      const huidig = rolWaarden(t.schema, o.metadata).status;
+      if (huidig === status || isVergrendeld(huidig, model.config)) continue;
+      const nieuw = { ...o.metadata, [r.status]: status };
+      const ongeldig = toets(`${t.naam}@${t.versie}`, t.schema as Record<string, unknown>, nieuw);
+      if (!ongeldig.geldig) fouten.push({ identificatie: o.identificatie, melding: `De metadata klopt niet met het model: ${ongeldig.fouten.map((f) => f.melding).join("; ")}` });
+      for (const melding of ontbreektVoorStatus(model.config, lijst, status, o.classificatie)) fouten.push({ identificatie: o.identificatie, melding });
+      plan.stukken.push({ identificatie: o.identificatie, metadata: nieuw, sleutel: r.status, type: t });
+    }
+  }
+  if (fouten.length) {
+    const n = new Set(fouten.map((f) => f.identificatie)).size;
+    throw new PlatformFout(
+      409,
+      "status-zaak-onvolledig",
+      `${n === 1 ? "Eén ander stuk" : `${n} andere stukken`} in ${rol === "zaak" ? "zaak" : "dossier"} ${waarde} ${n === 1 ? "is" : "zijn"} nog niet klaar om ${status} te worden. Classificeer ${n === 1 ? "dat stuk" : "die stukken"} eerst; dan krijgt de hele ${rol === "zaak" ? "zaak" : "het dossier"} de status in één keer.`,
+      fouten,
+    );
+  }
+  return plan;
+}
+
+/** Geeft de status door aan de andere stukken uit het plan (binnen dezelfde transactie). */
+export async function geefStatusDoor(c: Client, gemeente: string, actor: Actor, van: string, plan: StatusPlan): Promise<void> {
+  for (const s of plan.stukken) {
+    const g = await legGebeurtenisVast(c, gemeente, "metadata.vastgelegd", s.identificatie, actor, {
+      metadata: s.metadata,
+      gewijzigd: [s.sleutel],
+      doorgegeven: { van, status: plan.status, [plan.rol]: plan.waarde },
+    });
+    await c.query("UPDATE objecten SET metadata = $2, laatste_volgnummer = $3 WHERE identificatie = $1", [s.identificatie, s.metadata, g.volgnummer]);
+    await onthoudStatus(c, s.identificatie, s.type, s.metadata, g.tijdstip);
+    await zetInOutbox(c, gemeente, g.volgnummer, "zoekindex");
+  }
+}
+
 const VERGRENDELD = (status: string) =>
   new PlatformFout(409, "vergrendeld", `Dit stuk is ${status} en daarom vergrendeld. Dien een wijzigingsvoorstel in; een vrijgever beoordeelt het.`, { status });
 
@@ -163,6 +257,9 @@ export async function legClassificatieVast(
   const model = await leesClassificatiemodel(c);
   if (!model) throw new PlatformFout(409, "geen-classificatiemodel", "Deze gemeente heeft nog geen classificatiemodel. Stel het in het beheerportaal in.");
   const steun = isOndersteunend(vraag.resultaat);
+  // De status van het stuk nu: sommige attributen zijn pas vanaf een status verplicht.
+  const nu = await c.query("SELECT metadata, objecttype_naam, objecttype_versie FROM objecten WHERE identificatie = $1", [id]);
+  const status = rolWaarden((await leesObjecttype(c, nu.rows[0].objecttype_naam, nu.rows[0].objecttype_versie)).schema, nu.rows[0].metadata).status;
   const r = steun
     ? ondersteunendResultaat(model.config.ondersteunend, vraag.resultaat)
     : resultatenInGebruik(model.config, lijstVan(model.config)).find((x) => x.id === vraag.resultaat);
@@ -188,7 +285,7 @@ export async function legClassificatieVast(
     if (!attribuutGeldt(a, r?.waardering)) continue;
     const w = vraag.attributen?.[a.sleutel];
     if (w === undefined || w === "") {
-      if (a.verplicht) fouten.push({ veld: a.sleutel, melding: `${a.label} is verplicht.` });
+      if (attribuutVerplicht(a, status)) fouten.push({ veld: a.sleutel, melding: `${a.label} is verplicht.` });
       continue;
     }
     if (a.type === "ja-nee" && typeof w !== "boolean") fouten.push({ veld: a.sleutel, melding: `${a.label} is ja of nee.` });

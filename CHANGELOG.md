@@ -1,5 +1,13 @@
 # Wijzigingen
 
+## 0.18.0 — 2026-11-20
+
+**De status van een stuk en het classificatiemodel.** Werkt ook met een eigen statusveld (bijvoorbeeld de zaakstatus in een MDTO-model: ontvangen, in behandeling, afgesloten, geannuleerd).
+- Een stuk krijgt een status uit `classificerenVerplichtBij` alleen als het geclassificeerd is, met de attributen die bij die status verplicht zijn (409 `status-vraagt-classificatie`). Een nieuw stuk kan zo'n status dus niet meteen hebben.
+- Een status uit `doorgevenBij` gaat in dezelfde transactie naar alle zakelijke stukken in dezelfde zaak (of, zonder zaak, hetzelfde dossier), ook bij een andere versie van het objecttype. Stukken die de status al hebben of al vergrendeld zijn, blijven zoals ze zijn. Is een van de stukken niet klaar, dan krijgt geen enkel stuk de status (409 `status-zaak-onvolledig`, met per stuk wat ontbreekt). De gebeurtenis bij de andere stukken noemt het stuk waar het vandaan kwam (`doorgegeven`); de brondatum en vergrendeling volgen zoals bij een gewone statuswijziging.
+- Bij classificeren is een attribuut met `verplichtBij` verplicht als het stuk die status nu heeft.
+- Het antwoord op het vastleggen van metadata noemt `doorgegeven`.
+
 ## 0.17.0 — 2026-11-19
 
 - `GET /classificatie?versie=N`: die versie van het classificatiemodel, met de selectielijst. Het paneel toont een vastgelegde classificatie daarmee zoals ze is vastgelegd. Een versie die niet bestaat geeft `model: null`.

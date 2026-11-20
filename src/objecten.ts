@@ -15,7 +15,7 @@ import type { Client } from "./db.js";
 import type { Opslag } from "./opslag.js";
 import { ontsleutel, SleutelVernietigd, versleutel, type Sleutelbeheer } from "./sleutelbeheer.js";
 import { schemaBruikbaar, toets, type Toetsing } from "./validatie.js";
-import { onthoudStatus, toetsVergrendeling, verrijk } from "./classificatie.js";
+import { geefStatusDoor, onthoudStatus, toetsNieuweStatus, toetsVergrendeling, verrijk } from "./classificatie.js";
 
 export class PlatformFout extends Error {
   constructor(
@@ -53,7 +53,7 @@ export async function legGebeurtenisVast(
   return { volgnummer: Number(r.rows[0].volgnummer), tijdstip: r.rows[0].tijdstip.toISOString() };
 }
 
-async function zetInOutbox(c: Client, gemeente: string, volgnummer: number, taak: string): Promise<void> {
+export async function zetInOutbox(c: Client, gemeente: string, volgnummer: number, taak: string): Promise<void> {
   await c.query("INSERT INTO outbox (gemeente, volgnummer, taak) VALUES ($1, $2, $3)", [gemeente, volgnummer, taak]);
 }
 
@@ -248,7 +248,11 @@ export async function maakObject(
   const metadata = vraag.metadata ?? {};
   if (aard === "persoonlijk") {
     if (Object.keys(metadata).length) throw GEEN_METADATA();
-  } else weigerOngeldig(toets(`${type.naam}@${type.versie}`, type.schema, metadata));
+  } else {
+    weigerOngeldig(toets(`${type.naam}@${type.versie}`, type.schema, metadata));
+    // Een nieuw stuk is nog niet geclassificeerd: een status die dat vraagt, kan het nog niet hebben.
+    await toetsNieuweStatus(c, null, type, null, metadata, null);
+  }
 
   const id = randomUUID();
   // De sleutel bestaat vóór de registratie; mislukt de transactie, dan blijft
@@ -327,6 +331,8 @@ export async function legMetadataVast(
     (k) => JSON.stringify(huidig.metadata[k]) !== JSON.stringify(metadata[k]),
   );
   if (gewijzigd.length === 0) return huidig;
+  // Een nieuwe status: wat het classificatiemodel daarvoor vraagt, en aan welke stukken in de zaak hij wordt doorgegeven.
+  const plan = await toetsNieuweStatus(c, id, type, huidig.status, metadata, huidig.classificatie ?? null);
 
   const g = await legGebeurtenisVast(c, gemeente, "metadata.vastgelegd", id, actor, { metadata, gewijzigd });
   await c.query("UPDATE objecten SET metadata = $2, laatste_volgnummer = $3 WHERE identificatie = $1", [
@@ -336,7 +342,9 @@ export async function legMetadataVast(
   ]);
   await onthoudStatus(c, id, type, metadata, g.tijdstip);
   await zetInOutbox(c, gemeente, g.volgnummer, "zoekindex");
-  return leesObject(c, id);
+  if (plan) await geefStatusDoor(c, gemeente, actor, id, plan);
+  const uit = await leesObject(c, id);
+  return plan ? { ...uit, doorgegeven: { status: plan.status, aantal: plan.stukken.length, rol: plan.rol, waarde: plan.waarde } } : uit;
 }
 
 export function decodeer(inhoud: Inhoud, maxBytes: number): Buffer {

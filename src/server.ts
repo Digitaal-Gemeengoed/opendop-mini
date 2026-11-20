@@ -266,11 +266,24 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
             beschrijving: { type: "string", maxLength: 500 },
             standaard: { type: "string", maxLength: 40 },
             koppeling: { type: "object", maxProperties: 20, additionalProperties: { type: "string", maxLength: 200 } },
+            verplichtBij: { type: "array", maxItems: 20, items: { type: "string", maxLength: 100 } },
           },
         },
       },
       vergrendelBij: { type: "array", maxItems: 20, items: { type: "string", maxLength: 100 } },
       termijnStartBij: { type: "string", maxLength: 100 },
+      classificerenVerplichtBij: { type: "array", maxItems: 20, items: { type: "string", maxLength: 100 } },
+      doorgevenBij: { type: "array", maxItems: 20, items: { type: "string", maxLength: 100 } },
+      statusKlassen: {
+        type: "array",
+        maxItems: 20,
+        items: {
+          type: "object",
+          required: ["status", "namen"],
+          additionalProperties: false,
+          properties: { status: { type: "string", maxLength: 100 }, namen: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 100 } } },
+        },
+      },
     },
   } as const;
 
