@@ -37,6 +37,11 @@ export const config = {
     openbaoTransit: process.env.OPENBAO_TRANSIT ?? "transit",
   },
   /** "uit" of "opensearch" (OA-ADR-007). */
+  /** Omzetten naar PDF/A (Archiefregeling 2026, art. 2.9): Gotenberg; leeg = uit. */
+  omzetterUrl: (process.env.OMZETTER_URL ?? "").trim(),
+  /** Integriteitscontrole: elke zoveel minuten een ronde; elke versie eens per zoveel dagen. */
+  integriteitMinuten: Number(process.env.INTEGRITEIT_MINUTEN ?? 10),
+  integriteitDagen: Number(process.env.INTEGRITEIT_DAGEN ?? 30),
   zoekindex: {
     soort: (process.env.ZOEKINDEX ?? "uit") as "uit" | "opensearch",
     adres: () => nodig("OPENSEARCH_ADRES"),

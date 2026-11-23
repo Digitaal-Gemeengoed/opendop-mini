@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { arch as osArch, release as osRelease, type as osType } from "node:os";
 import type {
   Actor,
   Aard,
@@ -7,6 +9,7 @@ import type {
   Inhoud,
   Informatieobject,
   Objecttype,
+  Omgeving,
   Versie,
   Weergave,
 } from "@digitaalgemeengoed/oa-contract";
@@ -179,9 +182,15 @@ export async function leesObject(c: Client, id: string): Promise<ObjectMetStaat>
   const r = await c.query("SELECT o.*, g.naam AS gemeente_naam FROM objecten o JOIN gemeenten g ON g.id = o.gemeente WHERE o.identificatie = $1", [id]);
   if (r.rowCount === 0) throw new PlatformFout(404, "object-onbekend", "Dit object bestaat niet.");
   const o = r.rows[0];
-  const v = await c.query("SELECT * FROM versies WHERE object = $1 ORDER BY nummer", [id]);
+  // Met de laatste integriteitscontrole per versie (Archiefregeling 2026, art. 2.8).
+  const v = await c.query(
+    `SELECT v.*, ic.tijdstip AS gecontroleerd, ic.resultaat AS controle FROM versies v
+       LEFT JOIN LATERAL (SELECT tijdstip, resultaat FROM integriteitscontroles i WHERE i.object = v.object AND i.nummer = v.nummer ORDER BY tijdstip DESC LIMIT 1) ic ON true
+      WHERE v.object = $1 ORDER BY v.nummer`,
+    [id],
+  );
   const w = await c.query(
-    "SELECT nummer, formaat, media_type, grootte, sha256, soort, volgnummer FROM weergaven WHERE object = $1 ORDER BY nummer, soort DESC, formaat, volgnummer",
+    "SELECT nummer, formaat, media_type, grootte, sha256, soort, volgnummer, profiel FROM weergaven WHERE object = $1 ORDER BY nummer, soort DESC, formaat, volgnummer",
     [id],
   );
   const weergavenVan = (nummer: number): Weergave[] =>
@@ -193,6 +202,7 @@ export async function leesObject(c: Client, id: string): Promise<ObjectMetStaat>
         grootte: Number(x.grootte),
         sha256: x.sha256,
         ...(x.soort === "geanonimiseerd" ? { soort: "geanonimiseerd" as const, volgnummer: x.volgnummer } : {}),
+        ...(x.profiel ? { profiel: x.profiel } : {}),
       }));
   const type = await leesObjecttype(c, o.objecttype_naam, o.objecttype_versie);
   // Een persoonlijk stuk heeft geen metadata: dan is er ook niets onvolledig.
@@ -217,6 +227,8 @@ export async function leesObject(c: Client, id: string): Promise<ObjectMetStaat>
         ...(x.soort && x.soort !== "gewoon" ? { soort: x.soort, ...(x.bronversie ? { bronversie: x.bronversie } : {}) } : {}),
         ...(x.ppl ? { ppl: x.ppl } : {}),
         ...(x.beperkt ? { beperkt: true } : {}),
+        ...(x.omgeving ? { omgeving: x.omgeving } : {}),
+        ...(x.gecontroleerd ? { integriteit: { gecontroleerd: x.gecontroleerd.toISOString(), resultaat: x.controle } } : {}),
       }),
     ),
     aangemaakt: o.aangemaakt.toISOString(),
@@ -242,7 +254,7 @@ export async function maakObject(
   m: Middelen,
   gemeente: string,
   actor: Actor,
-  vraag: { objecttype: string; aard?: Aard; metadata?: Record<string, unknown>; inhoud?: Inhoud; weergave?: Inhoud },
+  vraag: { objecttype: string; aard?: Aard; metadata?: Record<string, unknown>; inhoud?: Inhoud; weergave?: Inhoud; omgeving?: unknown },
 ): Promise<ObjectMetStaat> {
   const type = await leesObjecttype(c, vraag.objecttype);
   const aard: Aard = vraag.aard ?? "zakelijk";
@@ -274,7 +286,7 @@ export async function maakObject(
   if (aard === "zakelijk") await onthoudStatus(c, id, type, metadata, g.tijdstip);
   // Persoonlijke stukken gaan niet in de zoekindex.
   if (aard === "zakelijk") await zetInOutbox(c, gemeente, g.volgnummer, "zoekindex");
-  if (vraag.inhoud) await voegVersieToe(c, m, gemeente, actor, id, vraag.inhoud, undefined, vraag.weergave);
+  if (vraag.inhoud) await voegVersieToe(c, m, gemeente, actor, id, vraag.inhoud, undefined, vraag.weergave, { omgeving: vraag.omgeving });
   return leesObject(c, id);
 }
 
@@ -378,9 +390,10 @@ export async function voegVersieToe(
   inhoud: Inhoud,
   verwachteVolgnummer?: number,
   weergave?: Inhoud,
-  opties: { soort?: "gewoon" | "anonimisering" | "terugzetting"; bronversie?: number; ppl?: number; vrijgave?: boolean } = {},
+  opties: { soort?: "gewoon" | "anonimisering" | "terugzetting"; bronversie?: number; ppl?: number; vrijgave?: boolean; omgeving?: unknown } = {},
 ): Promise<ObjectMetStaat> {
   const staat = await vergrendel(c, id, verwachteVolgnummer);
+  const omgeving = schoonOmgeving(opties.omgeving);
   if (staat.onleesbaar) throw ONLEESBAAR();
   const data = decodeer(inhoud, m.maxBytes);
   const sha256 = createHash("sha256").update(data).digest("hex");
@@ -426,12 +439,13 @@ export async function voegVersieToe(
     formaat: inhoud.formaat,
     ...(opties.soort && opties.soort !== "gewoon" ? { soort: opties.soort, bronversie: opties.bronversie } : {}),
     ...(weergave ? { weergaven: [{ formaat: weergave.formaat, mediaType: weergave.mediaType, sha256: wSha, grootte: wData!.length }] } : {}),
+    omgeving,
   });
   await c.query(
     `INSERT INTO versies (object, gemeente, nummer, sha256, grootte, media_type, formaat, opslagsleutel, vastgelegd, door, versleuteld, vergelijk_sha256, ruimte,
-                          soort, bronversie, ppl)
+                          soort, bronversie, ppl, omgeving)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             COALESCE($16, (SELECT ppl_werk FROM objecten WHERE identificatie = $1)))`,
+             COALESCE($16, (SELECT ppl_werk FROM objecten WHERE identificatie = $1)), $17)`,
     [
       id,
       gemeente,
@@ -449,6 +463,7 @@ export async function voegVersieToe(
       opties.soort ?? "gewoon",
       opties.bronversie ?? null,
       opties.ppl ?? null,
+      omgeving,
     ],
   );
   if (weergave && wData) {
@@ -459,8 +474,34 @@ export async function voegVersieToe(
     );
   }
   await c.query("UPDATE objecten SET laatste_volgnummer = $2 WHERE identificatie = $1", [id, g.volgnummer]);
-  if (staat.aard === "zakelijk") await zetInOutbox(c, gemeente, g.volgnummer, "zoekindex");
+  if (staat.aard === "zakelijk") {
+    await zetInOutbox(c, gemeente, g.volgnummer, "zoekindex");
+    // Een duurzame weergave (PDF/A), zo vroeg mogelijk (Archiefregeling 2026, art. 2.9).
+    await zetInOutbox(c, gemeente, g.volgnummer, "pdfa");
+  }
   return leesObject(c, id);
+}
+
+/** Wat de werkomgeving meldt, ingekort; aangevuld met het platform zelf (Archiefregeling 2026, art. 2.8). */
+export function schoonOmgeving(o: unknown): Omgeving {
+  const t = (w: unknown, max = 200) => (typeof w === "string" && w.trim() ? w.trim().slice(0, max) : undefined);
+  const r = (o ?? {}) as { werkomgeving?: Record<string, unknown>; browser?: unknown };
+  const w = r.werkomgeving && typeof r.werkomgeving === "object" ? r.werkomgeving : undefined;
+  const werkomgeving = w && t(w.id)
+    ? Object.fromEntries(Object.entries({ id: t(w.id, 60), naam: t(w.naam), versie: t(w.versie), platform: t(w.platform) }).filter(([, v]) => v)) as Omgeving["werkomgeving"]
+    : undefined;
+  const browser = t(r.browser, 300);
+  return { ...(werkomgeving ? { werkomgeving } : {}), ...(browser ? { browser } : {}), platform: PLATFORM_OMGEVING };
+}
+
+const PLATFORM_OMGEVING = { naam: "opendop-mini", versie: platformVersie(), runtime: `Node.js ${process.version}`, os: `${osType()} ${osRelease()} ${osArch()}` };
+
+function platformVersie(): string {
+  try {
+    return (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string }).version ?? "onbekend";
+  } catch {
+    return "onbekend";
+  }
 }
 
 /**
@@ -586,6 +627,7 @@ export async function legAnonimiseringVast(
   nummer: number,
   html: Inhoud,
   overzicht: Record<string, number>,
+  omgeving?: unknown,
 ): Promise<ObjectMetStaat> {
   const staat = await vergrendel(c, id);
   if (staat.onleesbaar) throw ONLEESBAAR();
@@ -606,13 +648,15 @@ export async function legAnonimiseringVast(
   const opTeSlaan = dek ? versleutel(dek, data, contextVan(id, nummer, "html", "geanonimiseerd", volgnummer)) : data;
   await m.opslag.schrijf(gemeente, sleutel, opTeSlaan, dek ? "application/octet-stream" : html.mediaType, staat.aard);
   const schoon = Object.fromEntries(Object.entries(overzicht).filter(([k, n]) => /^[a-z-]{2,30}$/.test(k) && Number.isInteger(n) && n >= 0));
-  const g = await legGebeurtenisVast(c, gemeente, "anonimisering.vastgelegd", id, actor, { versie: nummer, volgnummer, sha256: sha, afgeschermd: schoon });
+  const g = await legGebeurtenisVast(c, gemeente, "anonimisering.vastgelegd", id, actor, { versie: nummer, volgnummer, sha256: sha, afgeschermd: schoon, ...(omgeving !== undefined ? { omgeving: schoonOmgeving(omgeving) } : {}) });
   await c.query(
     `INSERT INTO weergaven (object, gemeente, nummer, formaat, media_type, sha256, grootte, opslagsleutel, versleuteld, ruimte, soort, volgnummer)
      VALUES ($1, $2, $3, 'html', $4, $5, $6, $7, $8, $9, 'geanonimiseerd', $10)`,
     [id, gemeente, nummer, html.mediaType, sha, data.length, sleutel, staat.versleuteld, staat.aard, volgnummer],
   );
   await c.query("UPDATE objecten SET laatste_volgnummer = $2 WHERE identificatie = $1", [id, g.volgnummer]);
+  // De geanonimiseerde weergave als PDF/A: wat openbaar gemaakt wordt.
+  if (staat.aard === "zakelijk") await zetInOutbox(c, gemeente, g.volgnummer, "pdfa");
   return leesObject(c, id);
 }
 

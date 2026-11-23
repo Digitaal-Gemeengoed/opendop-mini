@@ -1,5 +1,6 @@
 import Ajv2020Module from "ajv/dist/2020.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
+import { ontbrekendeVelden } from "@digitaalgemeengoed/oa-contract";
 
 const Ajv2020 = (Ajv2020Module as unknown as { default?: typeof Ajv2020Module }).default ?? Ajv2020Module;
 
@@ -31,10 +32,9 @@ export function toets(sleutel: string, schema: Record<string, unknown>, metadata
     cache.set(sleutel, v);
   }
   const geldig = v.gedeeltelijk(metadata) as boolean;
-  const fouten = geldig ? [] : (v.gedeeltelijk.errors ?? []).map(leesbaar);
-  const verplicht = ((schema as { required?: string[] }).required ?? []) as string[];
-  const m = (metadata ?? {}) as Record<string, unknown>;
-  const ontbreekt = verplicht.filter((veld) => m[veld] === undefined || m[veld] === null || m[veld] === "");
+  const fouten = geldig ? [] : (v.gedeeltelijk.errors ?? []).map(leesbaar).filter((f) => f.melding);
+  // Ook voorwaardelijk verplicht (x-oa-verplicht-als): de grond bij "beperkt openbaar".
+  const ontbreekt = ontbrekendeVelden(schema, (metadata ?? {}) as Record<string, unknown>);
   return { geldig, fouten, ontbreekt };
 }
 
@@ -53,6 +53,13 @@ function leesbaar(e: ErrorObject): { veld: string; melding: string } {
       return { veld, melding: "De waarde heeft niet de juiste vorm." };
     case "type":
       return { veld, melding: `Verwacht: ${(e.params as { type: string }).type}.` };
+    case "maximum":
+      return { veld, melding: `Ten hoogste ${(e.params as { limit: number }).limit}.` };
+    case "minimum":
+      return { veld, melding: `Ten minste ${(e.params as { limit: number }).limit}.` };
+    case "if":
+      // De fout zelf staat al bij de "then"-regel (zoals het maximum); deze dubbele niet tonen.
+      return { veld: "", melding: "" };
     default:
       return { veld, melding: e.message ?? "Ongeldige waarde." };
   }

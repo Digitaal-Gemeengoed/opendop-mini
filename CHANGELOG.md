@@ -1,5 +1,15 @@
 # Wijzigingen
 
+## 0.20.0 — 2026-11-23
+
+**Archiefregeling 2026.** Ontwerp: `oa-uitrol/docs/ontwerp/archiefregeling-2026.md`.
+- Openbaarheid: grond, duur en einddatum zijn verplicht bij "beperkt openbaar" (anders onvolledig); een duur boven het maximum voor de grond is ongeldig.
+- Werkomgeving (art. 2.8 onder a): `omgeving` bij nieuwe objecten, versies en anonimiseringen; het platform kort in en vult zichzelf aan (naam, versie, Node.js, besturingssysteem). Bij elke versie in het antwoord en in de gebeurtenis.
+- Integriteitscontrole (art. 2.8 onder b): de worker leest elke versie eens per `INTEGRITEIT_DAGEN` (30) terug en vergelijkt de sha256; resultaat in `integriteitscontroles`, de laatste bij elke versie. Een afwijking wordt de gebeurtenis `integriteit.afwijking`, met een melding in het log (mogelijk meldplichtig, art. 7.1).
+- PDF/A (art. 2.9): taak `pdfa` bij elke zakelijke versie en elke geanonimiseerde weergave. Gotenberg (`OMZETTER_URL`) zet om naar PDF/A-2b met PDF/UA; titel, auteur, omschrijving, trefwoorden en taal gaan vooraf als documenteigenschappen in een kopie van docx of odt. Weergave `pdf` met `profiel`, versleuteld zoals de versie. Mislukt omzetten: na een uur opnieuw.
+- Migratie 013. Nieuwe afhankelijkheid: fflate.
+- oa-contract 0.15.0.
+
 ## 0.19.0 — 2026-11-23
 
 **Een gemeente sluit zichzelf aan.**

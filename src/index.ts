@@ -7,6 +7,7 @@ import { draaiWorker } from "./worker.js";
 import { LokaalSleutelbeheer, OpenBaoSleutelbeheer, type Sleutelbeheer } from "./sleutelbeheer.js";
 import { GeenZoekindex, OpenSearchZoekindex, type Zoekindex } from "./zoekindex.js";
 import type { Middelen } from "./objecten.js";
+import { GeenOmzetter, Gotenberg } from "./omzetter.js";
 
 function maakSleutelbeheer(): Sleutelbeheer | null {
   const s = config.sleutelbeheer;
@@ -40,8 +41,13 @@ if (opdracht === "migreer") {
     gemeenten: leesGemeenten(process.env.GEMEENTEN),
   });
 } else if (opdracht === "worker") {
-  await draaiWorker(config.databaseUrlBeheer(), middelen(), maakZoekindex());
-  console.log("outbox-worker draait");
+  const omzetter = config.omzetterUrl ? new Gotenberg(config.omzetterUrl) : new GeenOmzetter();
+  await draaiWorker(config.databaseUrlBeheer(), middelen(), maakZoekindex(), 1000, {
+    omzetter,
+    integriteitMinuten: config.integriteitMinuten,
+    integriteitDagen: config.integriteitDagen,
+  });
+  console.log(`outbox-worker draait; PDF/A: ${omzetter.soort === "uit" ? "uit" : config.omzetterUrl}; integriteitscontrole elke ${config.integriteitMinuten} min`);
 } else {
   maakPool(config.databaseUrl());
   const app = bouwServer({ middelen: middelen(), zoekindex: maakZoekindex(), dienstsleutel: config.dienstsleutel() });

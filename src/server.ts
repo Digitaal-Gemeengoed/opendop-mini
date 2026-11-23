@@ -65,6 +65,8 @@ interface Context {
  */
 /** Zelfde vorm als de inhoud, zonder $id: één body mag een schema-id maar één keer gebruiken. */
 const { $id: _id, ...WEERGAVE_SCHEMA } = INHOUD_SCHEMA;
+/** Waarmee de versie is gemaakt (Archiefregeling 2026, art. 2.8); het platform kort in en vult aan. */
+const OMGEVING_SCHEMA = { type: "object", maxProperties: 5 } as const;
 
 export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; dienstsleutel: string; log?: boolean }): FastifyInstance {
   const m = opties.middelen;
@@ -548,7 +550,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
 
   // --- Informatieobjecten ---------------------------------------------------
 
-  app.post<{ Body: { objecttype: string; aard?: "zakelijk" | "persoonlijk"; metadata?: Record<string, unknown>; inhoud?: Inhoud; weergave?: Inhoud } }>(
+  app.post<{ Body: { objecttype: string; aard?: "zakelijk" | "persoonlijk"; metadata?: Record<string, unknown>; inhoud?: Inhoud; weergave?: Inhoud; omgeving?: Record<string, unknown> } }>(
     "/objecten",
     {
       schema: {
@@ -561,6 +563,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
             metadata: { type: "object" },
             inhoud: INHOUD_SCHEMA,
             weergave: WEERGAVE_SCHEMA,
+            omgeving: OMGEVING_SCHEMA,
           },
         },
       },
@@ -631,14 +634,14 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     },
   );
 
-  app.post<{ Params: { id: string }; Body: { inhoud: Inhoud; weergave?: Inhoud; verwachteVolgnummer?: number } }>(
+  app.post<{ Params: { id: string }; Body: { inhoud: Inhoud; weergave?: Inhoud; verwachteVolgnummer?: number; omgeving?: Record<string, unknown> } }>(
     "/objecten/:id/versies",
     {
       schema: {
         body: {
           type: "object",
           required: ["inhoud"],
-          properties: { inhoud: INHOUD_SCHEMA, weergave: WEERGAVE_SCHEMA, verwachteVolgnummer: { type: "integer" } },
+          properties: { inhoud: INHOUD_SCHEMA, weergave: WEERGAVE_SCHEMA, verwachteVolgnummer: { type: "integer" }, omgeving: OMGEVING_SCHEMA },
         },
       },
     },
@@ -646,7 +649,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
       const { gemeente, actor } = context(req);
       const o = await inGemeente(gemeente, async (c) => {
         await toetsToegang(c, req.params.id, actor);
-        return voegVersieToe(c, m, gemeente, actor, req.params.id, req.body.inhoud, req.body.verwachteVolgnummer, req.body.weergave);
+        return voegVersieToe(c, m, gemeente, actor, req.params.id, req.body.inhoud, req.body.verwachteVolgnummer, req.body.weergave, { omgeving: req.body.omgeving });
       });
       return antwoord.status(201).send(o);
     },
@@ -680,7 +683,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
         body: {
           type: "object",
           required: ["inhoud", "overzicht"],
-          properties: { inhoud: INHOUD_SCHEMA, overzicht: { type: "object", additionalProperties: { type: "integer", minimum: 0 }, maxProperties: 30 } },
+          properties: { inhoud: INHOUD_SCHEMA, overzicht: { type: "object", additionalProperties: { type: "integer", minimum: 0 }, maxProperties: 30 }, omgeving: OMGEVING_SCHEMA },
         },
       },
     },
@@ -688,7 +691,7 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
       const { gemeente, actor } = context(req);
       const o = await inGemeente(gemeente, async (c) => {
         await toetsToegang(c, req.params.id, actor);
-        return legAnonimiseringVast(c, m, gemeente, actor, req.params.id, Number(req.params.nummer), req.body.inhoud, req.body.overzicht);
+        return legAnonimiseringVast(c, m, gemeente, actor, req.params.id, Number(req.params.nummer), req.body.inhoud, req.body.overzicht, (req.body as { omgeving?: unknown }).omgeving);
       });
       return antwoord.status(201).send(o);
     },
