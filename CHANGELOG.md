@@ -1,5 +1,14 @@
 # Wijzigingen
 
+## 0.19.0 — 2026-11-23
+
+**Een gemeente sluit zichzelf aan.**
+- `PUT /gemeente` (met de dienstsleutel): de integratielaag meldt de thuisgemeente aan na het inloggen, het beheerportaal de gemeente die de beheerder kiest. Een nieuwe gemeente komt in het register; bucket, zoekindex en sleutels ontstaan bij het eerste gebruik. `GET /gemeente` geeft naam en datum van aansluiten.
+- Migratie 012: kolom `gemeenten.aangesloten`; de app-rol mag een gemeente toevoegen en haar naam wijzigen, niet verwijderen.
+- Elk informatieobject heeft `gemeenteNaam`.
+- `GEMEENTEN` mag e-maildomeinen bevatten (`haarlem:Gemeente Haarlem:haarlem.nl`, zoals op VPS 3); het platform negeert die. `GEMEENTEN` is niet meer nodig.
+- oa-contract 0.14.0.
+
 ## 0.18.1 — 2026-11-20
 
 - oa-contract 0.13.0.

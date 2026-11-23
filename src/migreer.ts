@@ -42,14 +42,20 @@ export async function migreer(url: string, opties: { appWachtwoord?: string; gem
   }
 }
 
-/** Leest "haarlem:Gemeente Haarlem,zandvoort:Gemeente Zandvoort". */
+/**
+ * Leest "haarlem:Gemeente Haarlem,zandvoort:Gemeente Zandvoort". Een derde deel
+ * met e-maildomeinen ("haarlem:Gemeente Haarlem:haarlem.nl", zoals GEMEENTEN op
+ * VPS 3) negeert het platform: die zijn voor Keycloak.
+ */
 export function leesGemeenten(tekst: string | undefined): { id: string; naam: string }[] {
   return (tekst ?? "")
+    .replace(/^"|"$/g, "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => {
-      const [id, ...naam] = s.split(":");
-      return { id: id.trim(), naam: (naam.join(":") || id).trim() };
+      const [id, ...rest] = s.split(":");
+      if (rest.length > 1 && /^[a-z0-9.+-]+$/.test(rest[rest.length - 1]!)) rest.pop();
+      return { id: id!.trim(), naam: (rest.join(":") || id!).trim() };
     });
 }

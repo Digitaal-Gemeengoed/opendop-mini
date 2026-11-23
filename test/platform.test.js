@@ -168,3 +168,37 @@ test("de worker verwerkt de outbox", { skip: overslaan }, async () => {
   assert.equal(rest.rows[0].n, 0);
   await beheer.end();
 });
+
+test("een nieuwe gemeente sluit zichzelf aan bij de eerste aanmelding", { skip: overslaan }, async () => {
+  // Nog niet aangesloten: geen register.
+  let r = await app.inject({ method: "GET", url: "/gemeente", headers: kop("velsen-test") });
+  assert.equal(r.statusCode, 404);
+  r = await app.inject({ method: "PUT", url: "/gemeente", headers: kop("velsen-test"), payload: { naam: "Gemeente Velsen" } });
+  assert.equal(r.statusCode, 200);
+  assert.equal(r.json().nieuw, true);
+  // Nogmaals: niet nieuw; een andere naam wordt bijgewerkt.
+  r = await app.inject({ method: "PUT", url: "/gemeente", headers: kop("velsen-test"), payload: { naam: "Gemeente Velsen" } });
+  assert.equal(r.json().nieuw, false);
+  await app.inject({ method: "PUT", url: "/gemeente", headers: kop("velsen-test"), payload: { naam: "Velsen" } });
+  r = await app.inject({ method: "GET", url: "/gemeente", headers: kop("velsen-test") });
+  assert.equal(r.json().naam, "Velsen");
+  // Daarna werkt alles voor die gemeente, met het gedeelde objecttype, en gescheiden van de andere.
+  r = await app.inject({ method: "POST", url: "/objecten", headers: kop("velsen-test"), payload: { objecttype: "document", metadata: { naam: "Eerste stuk" }, inhoud: html("<p>x</p>") } });
+  assert.equal(r.statusCode, 201, r.body);
+  const nieuwId = r.json().identificatie;
+  r = await app.inject({ method: "GET", url: `/objecten/${nieuwId}`, headers: kop("haarlem") });
+  assert.equal(r.statusCode, 404);
+  // Zonder dienstsleutel geen aansluiten.
+  r = await app.inject({ method: "PUT", url: "/gemeente", headers: { "x-oa-gemeente": "nep" }, payload: { naam: "Nep" } });
+  assert.equal(r.statusCode, 401);
+});
+
+test("GEMEENTEN mag e-maildomeinen bevatten (voor Keycloak); het platform negeert die", async () => {
+  const { leesGemeenten } = await import("../dist/migreer.js");
+  assert.deepEqual(leesGemeenten('"haarlem:Gemeente Haarlem:haarlem.nl,zandvoort:Gemeente Zandvoort:zandvoort.nl+zandvoort.org,bloemendaal"'), [
+    { id: "haarlem", naam: "Gemeente Haarlem" },
+    { id: "zandvoort", naam: "Gemeente Zandvoort" },
+    { id: "bloemendaal", naam: "bloemendaal" },
+  ]);
+  assert.deepEqual(leesGemeenten("haarlem:Gemeente Haarlem"), [{ id: "haarlem", naam: "Gemeente Haarlem" }]);
+});

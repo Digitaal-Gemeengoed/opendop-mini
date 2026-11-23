@@ -176,7 +176,7 @@ function weigerOngeldig(t: Toetsing): void {
 
 export async function leesObject(c: Client, id: string): Promise<ObjectMetStaat> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new PlatformFout(404, "object-onbekend", "Dit object bestaat niet.");
-  const r = await c.query("SELECT * FROM objecten WHERE identificatie = $1", [id]);
+  const r = await c.query("SELECT o.*, g.naam AS gemeente_naam FROM objecten o JOIN gemeenten g ON g.id = o.gemeente WHERE o.identificatie = $1", [id]);
   if (r.rowCount === 0) throw new PlatformFout(404, "object-onbekend", "Dit object bestaat niet.");
   const o = r.rows[0];
   const v = await c.query("SELECT * FROM versies WHERE object = $1 ORDER BY nummer", [id]);
@@ -201,6 +201,7 @@ export async function leesObject(c: Client, id: string): Promise<ObjectMetStaat>
     identificatie: o.identificatie,
     aard: o.aard,
     gemeente: o.gemeente,
+    gemeenteNaam: o.gemeente_naam,
     objecttype: { naam: o.objecttype_naam, versie: o.objecttype_versie },
     metadata: o.metadata,
     versies: v.rows.map(

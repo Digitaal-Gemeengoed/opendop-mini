@@ -12,7 +12,7 @@ const VERSIE = (() => {
 })();
 import type { Actor, AnonimiseringsMeting, Inhoud, PiiInvoer, Zoekantwoord, Zoekresultaat } from "@digitaalgemeengoed/oa-contract";
 import { INHOUD_SCHEMA, METADATAMODELLEN, MODELNAAM_MAX, SIGNAALWOORDEN, ROLLEN, WAARDELIJSTEN, actieveVelden, controleerConfig, rolWaarden, schemaUitConfig, type MetadatamodelConfig } from "@digitaalgemeengoed/oa-contract";
-import { inGemeente } from "./db.js";
+import { huidigePool, inGemeente } from "./db.js";
 import { ZoekenUit, type Zoekindex } from "./zoekindex.js";
 import {
   PlatformFout,
@@ -107,6 +107,34 @@ export function bouwServer(opties: { middelen: Middelen; zoekindex: Zoekindex; d
     }
     app.log.error(fout);
     return antwoord.status(500).send({ fout: "intern", melding: "Er ging iets mis in het platform." });
+  });
+
+  // --- Gemeente --------------------------------------------------------------
+  // De integratielaag meldt de thuisgemeente aan na het inloggen; het
+  // beheerportaal de gemeente die de beheerder kiest. Nieuw → aangesloten.
+  app.put<{ Body: { naam: string } }>(
+    "/gemeente",
+    { schema: { body: { type: "object", required: ["naam"], additionalProperties: false, properties: { naam: { type: "string", minLength: 1, maxLength: 200 } } } } },
+    async (req) => {
+      const { gemeente } = context(req);
+      const naam = req.body.naam.trim();
+      const r = await huidigePool().query<{ nieuw: boolean }>(
+        `INSERT INTO gemeenten (id, naam) VALUES ($1, $2)
+         ON CONFLICT (id) DO UPDATE SET naam = EXCLUDED.naam WHERE gemeenten.naam IS DISTINCT FROM EXCLUDED.naam
+         RETURNING (xmax = 0) AS nieuw`,
+        [gemeente, naam],
+      );
+      const nieuw = r.rows[0]?.nieuw === true;
+      if (nieuw) app.log.info({ gemeente }, "gemeente aangesloten");
+      return { id: gemeente, naam, nieuw };
+    },
+  );
+
+  app.get("/gemeente", async (req) => {
+    const { gemeente } = context(req);
+    const r = await huidigePool().query<{ naam: string; aangesloten: string }>("SELECT naam, aangesloten FROM gemeenten WHERE id = $1", [gemeente]);
+    if (!r.rowCount) throw new PlatformFout(404, "gemeente-onbekend", "Deze gemeente is niet aangesloten.");
+    return { id: gemeente, naam: r.rows[0]!.naam, aangesloten: r.rows[0]!.aangesloten };
   });
 
   app.get("/gezondheid", async () => ({
