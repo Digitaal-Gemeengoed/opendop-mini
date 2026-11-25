@@ -1,5 +1,9 @@
 # Wijzigingen
 
+## 0.20.1 — 2026-11-25
+
+- oa-contract 0.16.0.
+
 ## 0.20.0 — 2026-11-23
 
 **Archiefregeling 2026.** Ontwerp: `oa-uitrol/docs/ontwerp/archiefregeling-2026.md`.
